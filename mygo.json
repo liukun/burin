@@ -1,0 +1,13 @@
+{
+  "name": "Burin",
+  "identifier": "io.github.liukun.burin",
+  "version": "0.1.0",
+  "out": "build",
+  "macos": {
+    "minimumSystemVersion": "13.0",
+    "infoPlist": {
+      "LSUIElement": true,
+      "NSHumanReadableCopyright": "Copyright 2026 liukun"
+    }
+  }
+}

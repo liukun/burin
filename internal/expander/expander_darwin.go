@@ -5,17 +5,20 @@ package expander
 import (
 	"log"
 	"time"
-	"unicode/utf8"
 
 	"burin/internal/eventtap"
 	"burin/internal/keys"
 	"burin/internal/pasteboard"
 )
 
-// Paste deletes the keyword with backspaces and pastes text through a
-// concealed pasteboard entry.
+// Delete removes the last n typed characters with backspaces.
+func Delete(n int) {
+	keys.Backspaces(n)
+}
+
+// Paste inserts text through a concealed pasteboard entry. It first waits
+// briefly so preceding backspaces settle before the paste.
 func Paste(keyword, text string) {
-	keys.Backspaces(utf8.RuneCountInString(keyword))
 	time.Sleep(20 * time.Millisecond)
 	if !pasteboard.WriteConcealed(text) {
 		log.Printf("expander: pasteboard write failed for %q", keyword)
@@ -26,14 +29,14 @@ func Paste(keyword, text string) {
 }
 
 // Listen feeds keyDown events from a new tap into e until the tap is
-// stopped.
+// stopped. Keys that HandleKey consumes never reach the focused app.
 func Listen(e *Expander) (*eventtap.Tap, error) {
 	tap := &eventtap.Tap{}
-	err := tap.Start(eventtap.MaskBit(eventtap.EventKeyDown), func(eventType uint32, event uintptr) {
+	err := tap.Start(eventtap.MaskBit(eventtap.EventKeyDown), func(eventType uint32, event uintptr) bool {
 		if eventType != eventtap.EventKeyDown {
-			return
+			return false
 		}
-		e.HandleKey(Key{
+		return e.HandleKey(Key{
 			Keycode: eventtap.Keycode(event),
 			Flags:   eventtap.Flags(event),
 			Chars:   eventtap.UnicodeString(event),

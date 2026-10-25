@@ -1,7 +1,8 @@
 //go:build darwin
 
-// Package eventtap runs a listen-only CGEventTap on a dedicated CFRunLoop
-// thread.
+// Package eventtap runs an active CGEventTap on a dedicated CFRunLoop
+// thread. Being active,
+// the tap can consume events so they never reach the focused app.
 package eventtap
 
 import (
@@ -28,7 +29,7 @@ const (
 
 	sessionEventTap      = 1
 	headInsertEventTap   = 0
-	tapOptionListenOnly  = 1
+	tapOptionDefault     = 0
 	keyboardEventKeycode = 9
 	unicodeBufSize       = 16
 )
@@ -36,11 +37,13 @@ const (
 // MaskBit is CGEventMaskBit.
 func MaskBit(eventType uint32) uint64 { return 1 << eventType }
 
-// Handler receives every tapped event on the tap's run loop thread. It must
-// return quickly.
-type Handler func(eventType uint32, event uintptr)
+// Handler receives every tapped event on the tap's run loop thread and
+// returns true to consume it, so it is not delivered any further. The tap
+// is active, so input waits on the handler: it must return quickly, or
+// macOS disables the tap by timeout (the tap re-enables itself).
+type Handler func(eventType uint32, event uintptr) bool
 
-// Tap is a listen-only CGEventTap. The zero value is ready to Start.
+// Tap is an active CGEventTap. The zero value is ready to Start.
 type Tap struct {
 	mu      sync.Mutex
 	handler Handler
@@ -139,10 +142,14 @@ func sharedCallback() uintptr {
 	return callbackPtr
 }
 
-func dispatch(proxy, eventType, event, userInfo uintptr) uintptr {
+func dispatch(proxy, eventType, event, userInfo uintptr) (ret uintptr) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("eventtap: callback panic: %v", r)
+			// Active tap: returning NULL drops the key event. Only return 0
+			// when the handler explicitly returns true; on panic pass the
+			// original event through.
+			ret = event
 		}
 	}()
 	tapsMu.Lock()
@@ -151,18 +158,23 @@ func dispatch(proxy, eventType, event, userInfo uintptr) uintptr {
 	if t == nil {
 		return event
 	}
-	t.handleEvent(uint32(eventType), event)
+	if t.handleEvent(uint32(eventType), event) {
+		// Returning NULL from an active tap drops the event.
+		return 0
+	}
 	return event
 }
 
-func (t *Tap) handleEvent(eventType uint32, event uintptr) {
+// handleEvent reports whether the event is consumed. Tap-disabled
+// notifications are never consumed.
+func (t *Tap) handleEvent(eventType uint32, event uintptr) bool {
 	disabled := eventType == eventTapDisabledByTimeout || eventType == eventTapDisabledByUserInput
 	if disabled {
 		log.Printf("eventtap: tap disabled (type %#x), re-enabling", eventType)
 		cgEventTapEnable(t.port, true)
-		return
+		return false
 	}
-	t.handler(eventType, event)
+	return t.handler(eventType, event)
 }
 
 // Start creates the tap for the events in mask and runs it on a locked OS
@@ -199,7 +211,7 @@ func (t *Tap) run(mask uint64, ready chan<- error, done chan<- struct{}) {
 	defer runtime.UnlockOSThread()
 	defer close(done)
 
-	port := cgEventTapCreate(sessionEventTap, headInsertEventTap, tapOptionListenOnly, mask, sharedCallback(), t.handle)
+	port := cgEventTapCreate(sessionEventTap, headInsertEventTap, tapOptionDefault, mask, sharedCallback(), t.handle)
 	if port == 0 {
 		ready <- errors.New("eventtap: CGEventTapCreate failed; grant Accessibility and Input Monitoring in System Settings > Privacy & Security, then relaunch")
 		return

@@ -234,6 +234,8 @@ func (e *Expander) fire(s Snippet, gen uint64) {
 // run scripts that move focus to another app, and the backspaces must land
 // in the app where the keyword was typed. If evaluation fails, the keyword
 // (and the consumed space) is pasted back, as if nothing had expanded.
+// Known limitation: if evaluation itself moves focus (e.g. {shell(open -a X)}
+// followed by more text), the paste lands in the newly focused app.
 func (e *Expander) run(s Snippet, afterSpace bool) {
 	defer e.expanding.Store(false)
 	defer func() {

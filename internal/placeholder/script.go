@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -22,11 +23,14 @@ const DefaultTimeout = 3 * time.Second
 type Runner struct {
 	// Dir holds the scripts, looked up by name.
 	Dir string
-	// Env is the environment of the commands; nil inherits Burin's.
-	Env     []string
+	// Env, if set, returns the environment of each command; called per
+	// run so the environment can change later (e.g. once the login PATH
+	// is known). nil, or a nil result, inherits Burin's.
+	Env     func() []string
 	Timeout time.Duration
-	// OnStderr, if set, receives non-empty stderr of a command, whether
-	// or not it succeeded.
+	// OnStderr, if set, receives non-empty stderr of a command that
+	// succeeded. A failed command reports its stderr in the returned
+	// error instead, so callers see one message per failure.
 	OnStderr func(name, stderr string)
 }
 
@@ -87,7 +91,9 @@ func (r *Runner) run(name, path string, args []string, stdin string) (string, er
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.Env = r.Env
+	if r.Env != nil {
+		cmd.Env = r.Env()
+	}
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -100,14 +106,14 @@ func (r *Runner) run(name, path string, args []string, stdin string) (string, er
 
 	err := cmd.Run()
 	errText := strings.TrimSpace(stderr.String())
-	if errText != "" && r.OnStderr != nil {
-		r.OnStderr(name, errText)
-	}
 	if err == nil {
+		if errText != "" && r.OnStderr != nil {
+			r.OnStderr(name, errText)
+		}
 		return strings.TrimRight(stdout.String(), "\r\n"), nil
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return "", fmt.Errorf("%s: timed out after %v", name, timeout)
+		return "", fmt.Errorf("%s: timed out after %v%s", name, timeout, stderrSuffix(errText))
 	}
 	return "", fmt.Errorf("%s: %w%s", name, err, stderrSuffix(errText))
 }
@@ -119,19 +125,52 @@ func stderrSuffix(s string) string {
 	return ": " + s
 }
 
-// LoginPath returns PATH as the user's login shell sets it, or Burin's
-// own PATH when the shell cannot tell.
-func LoginPath() string {
-	fallback := os.Getenv("PATH")
-	shell := os.Getenv("SHELL")
+// loginPathTimeout bounds the login shell that reports PATH.
+const loginPathTimeout = 5 * time.Second
+
+// StartLoginPath looks up PATH as the user's login shell sets it in the
+// background and returns a function that reports Burin's own PATH until
+// the lookup is done, and the login PATH after (or Burin's own PATH if
+// the shell cannot tell).
+func StartLoginPath() func() string {
+	return startLoginPath(os.Getenv("SHELL"), os.Getenv("PATH"), loginPathTimeout)
+}
+
+func startLoginPath(shell, fallback string, timeout time.Duration) func() string {
+	var resolved atomic.Pointer[string]
+	go func() {
+		path := loginPath(shell, fallback, timeout)
+		resolved.Store(&path)
+	}()
+	return func() string {
+		if p := resolved.Load(); p != nil {
+			return *p
+		}
+		return fallback
+	}
+}
+
+// loginPath runs shell as a login shell to print PATH, returning
+// fallback on any failure.
+func loginPath(shell, fallback string, timeout time.Duration) string {
 	if shell == "" {
 		return fallback
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// fish keeps PATH as a list, which echo would join with spaces.
+	script := "echo $PATH"
+	if filepath.Base(shell) == "fish" {
+		script = "string join : $PATH"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, shell, "-lc", "echo $PATH").Output()
-	if err != nil {
-		log.Printf("placeholder: login PATH: %v", err)
+	cmd := exec.CommandContext(ctx, shell, "-l", "-c", script)
+	// Do not wait on children of the login scripts that hold stdout open.
+	cmd.WaitDelay = 500 * time.Millisecond
+	out, err := cmd.Output()
+	// ErrWaitDelay: the shell exited normally but a child still held
+	// stdout; out is complete.
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		log.Printf("placeholder: login PATH from %s: %v", shell, err)
 		return fallback
 	}
 	// Login scripts may print banners; PATH is the last line.

@@ -27,6 +27,9 @@ type Watcher struct {
 
 // Watch watches dir and its subdirectories, including ones created later,
 // and calls onChange on its own goroutine delay after the last change.
+// If dir itself is removed and recreated, watching stops; Reload from the
+// tray picks up changes. This is the hand-written fsnotify watcher, kept
+// rather than switching to mygo.WatchFiles.
 func Watch(dir string, delay time.Duration, onChange func()) (*Watcher, error) {
 	fw, err := fsnotify.NewWatcher()
 	if err != nil {

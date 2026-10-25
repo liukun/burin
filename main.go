@@ -42,10 +42,14 @@ func configDir() string {
 	return filepath.Join(home, ".config", "burin")
 }
 
-func newEvaluator(scriptsDir string, path string) *placeholder.Evaluator {
+// newEvaluator returns an evaluator whose commands run with PATH set to
+// path(), read on every run.
+func newEvaluator(scriptsDir string, path func() string) *placeholder.Evaluator {
 	runner := &placeholder.Runner{
 		Dir: scriptsDir,
-		Env: placeholder.EnvWithPath(os.Environ(), path),
+		Env: func() []string { return placeholder.EnvWithPath(os.Environ(), path()) },
+		// Only successful commands reach here; a failure carries its
+		// stderr in the error, which placeholderFailed reports once.
 		OnStderr: func(name, stderr string) {
 			log.Printf("%s stderr: %s", name, stderr)
 			notify(name, stderr)
@@ -120,7 +124,7 @@ func main() {
 	dir := configDir()
 	b := &burin{
 		snippetsDir: filepath.Join(dir, "snippets"),
-		eval:        newEvaluator(filepath.Join(dir, "scripts"), placeholder.LoginPath()),
+		eval:        newEvaluator(filepath.Join(dir, "scripts"), placeholder.StartLoginPath()),
 		ex:          expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
 		status:      &mygo.MenuItem{Label: "Loading snippets", Disabled: true},
 	}

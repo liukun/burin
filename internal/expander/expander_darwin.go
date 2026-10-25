@@ -21,6 +21,8 @@ func Delete(n int) {
 func Paste(keyword, text string) {
 	time.Sleep(20 * time.Millisecond)
 	if !pasteboard.WriteConcealed(text) {
+		// The keyword is already deleted and cannot be restored without
+		// the pasteboard, so the failure is only logged.
 		log.Printf("expander: pasteboard write failed for %q", keyword)
 		return
 	}

@@ -2,6 +2,7 @@ package placeholder
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -231,13 +232,13 @@ func TestRunnerScript(t *testing.T) {
 	writeScript(t, dir, "noexec", `echo no`, 0o644)
 	writeScript(t, dir, "warn", `echo warned >&2; echo out`, 0o755)
 	writeScript(t, dir, "fails", `echo bad thing >&2; exit 3`, 0o755)
-	writeScript(t, dir, "slow", `sleep 5; echo late`, 0o755)
+	writeScript(t, dir, "slow", `echo partial >&2; sleep 5; echo late`, 0o755)
 	writeScript(t, dir, "env", `printf %s "$PATH"`, 0o755)
 
 	logs := &stderrLog{}
 	// macOS may scan a new executable on first run, which takes a while.
 	r := &Runner{Dir: dir, Timeout: 10 * time.Second, OnStderr: logs.add,
-		Env: EnvWithPath(os.Environ(), "/usr/bin:/bin:/custom")}
+		Env: func() []string { return EnvWithPath(os.Environ(), "/usr/bin:/bin:/custom") }}
 
 	out, err := r.Script("echoargs", []string{"a b", "c"}, "in")
 	if err != nil || out != "a b|c|in" {
@@ -262,14 +263,14 @@ func TestRunnerScript(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bad thing") {
 		t.Fatalf("fails: %v", err)
 	}
-	if got := logs.get(); !reflect.DeepEqual(got, []string{"warn: warned", "fails: bad thing"}) {
+	if got := logs.get(); !reflect.DeepEqual(got, []string{"warn: warned"}) {
 		t.Fatalf("stderr %v", got)
 	}
 
 	start := time.Now()
-	short := &Runner{Dir: dir, Timeout: 300 * time.Millisecond}
+	short := &Runner{Dir: dir, Timeout: 1500 * time.Millisecond}
 	_, err = short.Script("slow", nil, "")
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
+	if err == nil || !strings.Contains(err.Error(), "timed out") || !strings.Contains(err.Error(), "partial") {
 		t.Fatalf("slow: %v", err)
 	}
 	if d := time.Since(start); d > 4*time.Second {
@@ -312,5 +313,74 @@ func TestEnvWithPath(t *testing.T) {
 	got := EnvWithPath([]string{"A=1", "PATH=/old", "B=2"}, "/new")
 	if !reflect.DeepEqual(got, []string{"A=1", "B=2", "PATH=/new"}) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// fakeShell writes an executable named name that prints a banner, then
+// the line for the -c script it expects, or "unexpected <script>".
+func fakeShell(t *testing.T, name, wantScript, path string) string {
+	t.Helper()
+	dir := t.TempDir()
+	body := fmt.Sprintf(`echo "Welcome banner"
+if [ "$1" = -l ] && [ "$2" = -c ] && [ "$3" = '%s' ]; then echo '%s'; else echo "unexpected $*"; fi`,
+		wantScript, path)
+	writeScript(t, dir, name, body, 0o755)
+	return filepath.Join(dir, name)
+}
+
+func TestLoginPath(t *testing.T) {
+	dir := t.TempDir()
+	writeScript(t, dir, "fails", `echo /x; exit 1`, 0o755)
+	writeScript(t, dir, "empty", `echo; echo`, 0o755)
+	cases := []struct{ name, shell, want string }{
+		{"zsh", fakeShell(t, "zsh", "echo $PATH", "/opt/bin:/usr/bin"), "/opt/bin:/usr/bin"},
+		{"fish", fakeShell(t, "fish", "string join : $PATH", "/fish/bin:/usr/bin"), "/fish/bin:/usr/bin"},
+		{"fails", filepath.Join(dir, "fails"), "/fallback"},
+		{"empty", filepath.Join(dir, "empty"), "/fallback"},
+		{"no shell", "", "/fallback"},
+		{"missing", filepath.Join(dir, "missing"), "/fallback"},
+	}
+	for _, c := range cases {
+		if got := loginPath(c.shell, "/fallback", 10*time.Second); got != c.want {
+			t.Fatalf("%s: %q", c.name, got)
+		}
+	}
+}
+
+func TestLoginPathChildHoldsStdout(t *testing.T) {
+	dir := t.TempDir()
+	// The shell exits at once; the background sleep keeps stdout open.
+	writeScript(t, dir, "bg", `echo /x/bin; sleep 30 & exit 0`, 0o755)
+	if got := loginPath(filepath.Join(dir, "bg"), "/fallback", 10*time.Second); got != "/x/bin" {
+		t.Fatalf("bg: %q", got)
+	}
+}
+
+func TestLoginPathTimeout(t *testing.T) {
+	dir := t.TempDir()
+	// The background sleep keeps stdout open after the shell is killed.
+	writeScript(t, dir, "hangs", `sleep 30 & sleep 30`, 0o755)
+	start := time.Now()
+	if got := loginPath(filepath.Join(dir, "hangs"), "/fallback", 300*time.Millisecond); got != "/fallback" {
+		t.Fatalf("hangs: %q", got)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("timeout took %v", d)
+	}
+}
+
+func TestStartLoginPath(t *testing.T) {
+	dir := t.TempDir()
+	writeScript(t, dir, "slow", `sleep 1; echo /late`, 0o755)
+	get := startLoginPath(filepath.Join(dir, "slow"), "/fallback", 10*time.Second)
+	if got := get(); got != "/fallback" {
+		t.Fatalf("before lookup: %q", got)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for get() != "/late" {
+		if time.Now().After(deadline) {
+			t.Fatalf("after lookup: %q", get())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

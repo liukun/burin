@@ -8,6 +8,7 @@ import (
 )
 
 // listMarkerRE matches lines that start a list item, heading or quote.
+// Go's \d and \s are ASCII-only.
 var listMarkerRE = regexp.MustCompile(`^(?:[-*+#>]|\d+[.)])(?:\s|$)`)
 
 // Unwrap strips the common indent and merges soft-wrapped lines:

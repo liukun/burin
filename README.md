@@ -15,6 +15,14 @@ go tool mygo vet .
 go tool mygo build      # output in build/darwin-arm64/
 ```
 
+## Known limitations
+
+- A snippet whose placeholder moves focus (e.g. `{shell(open -a X)}` followed by more text) pastes into the newly focused app.
+- If writing the pasteboard fails, the keyword is already deleted and cannot be restored; the failure is only logged.
+- If the snippets root directory is deleted and recreated, the watcher stops; use the tray's Reload.
+- `unwrap` matches `\s` and `\d` as ASCII only.
+- The snippet watcher is the hand-written fsnotify one kept from earlier, not `mygo.WatchFiles`.
+
 ## License
 
 [MIT](LICENSE)

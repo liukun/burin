@@ -27,6 +27,7 @@ func TestParse(t *testing.T) {
 		{"shell(echo a, b)", []Call{{Name: "shell", Args: []string{"echo a, b"}}}},
 		{"shell(echo $(date) | tr a b)", []Call{{Name: "shell", Args: []string{"echo $(date) | tr a b"}}}},
 		{`shell("echo ')' | awk '{print $1}'")`, []Call{{Name: "shell", Args: []string{`echo ')' | awk '{print $1}'`}}}},
+		{`shell(open -a "Activity Monitor")|null`, []Call{{Name: "shell", Args: []string{`open -a "Activity Monitor"`}}, {Name: "null"}}},
 		{`shell("/bin/x" --flag)`, []Call{{Name: "shell", Args: []string{`"/bin/x" --flag`}}}},
 		{"clipboard|f2_ip", []Call{{Name: "clipboard"}, {Name: "f2_ip"}}},
 	}

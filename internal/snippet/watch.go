@@ -36,7 +36,7 @@ func Watch(dir string, delay time.Duration, onChange func()) (*Watcher, error) {
 		return nil, err
 	}
 	w := &Watcher{fs: fw, delay: delay, onChange: onChange, done: make(chan struct{})}
-	if err := w.addTree(resolveRoot(dir)); err != nil {
+	if err := w.addTree(ResolveRoot(dir)); err != nil {
 		fw.Close()
 		return nil, err
 	}

@@ -80,7 +80,13 @@ func goString(str objc.ID) string {
 
 // WriteConcealed puts text on the pasteboard marked concealed and transient,
 // so clipboard history managers skip it.
-func WriteConcealed(text string) bool {
+func WriteConcealed(text string) bool { return write(text, true) }
+
+// WriteText puts text on the pasteboard as an ordinary copy, which
+// clipboard history managers record.
+func WriteText(text string) bool { return write(text, false) }
+
+func write(text string, concealed bool) bool {
 	ok := false
 	withPool(func() {
 		pb := general()
@@ -89,6 +95,9 @@ func WriteConcealed(text string) bool {
 			return
 		}
 		ok = true
+		if !concealed {
+			return
+		}
 		pb.Send(sel("setString:forType:"), nsString(""), nsString(typeConcealed))
 		pb.Send(sel("setString:forType:"), nsString(""), nsString(typeTransient))
 	})

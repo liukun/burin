@@ -1,0 +1,131 @@
+package hud
+
+import (
+	"errors"
+	"fmt"
+	"image/png"
+	"math"
+	"os"
+	"slices"
+	"testing"
+
+	"github.com/egoist/mygo/ui"
+
+	"burin/internal/leader"
+)
+
+func tester(t *testing.T, s *leader.Snapshot) (*ui.Tester, *[2]float32) {
+	t.Helper()
+	var size [2]float32
+	tt := ui.NewTester(func(c *ui.Context) {
+		w, h := Build(c, *s)
+		size = [2]float32{w, h}
+	}, 600, 400)
+	return tt, &size
+}
+
+// savePNG writes the frame for a look by hand, when HUD_PNG names a dir.
+func savePNG(t *testing.T, tt *ui.Tester, name string) {
+	dir := os.Getenv("HUD_PNG")
+	if dir == "" {
+		return
+	}
+	f, err := os.Create(dir + "/" + name + ".png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, tt.Image()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEntriesAndMarks(t *testing.T) {
+	s := leader.Snapshot{Active: true, Key: "cmd_r", Entries: []leader.EntryState{
+		{Key: "k", Title: "Kitty", Status: leader.Running},
+		{Key: "l", Title: "Activity Monitor", Status: leader.Done},
+		{Key: "b", Title: "Google Chrome", Status: leader.Failed},
+		{Key: "d", Title: "复制今日日期"},
+	}}
+	tt, size := tester(t, &s)
+	savePNG(t, tt, "entries")
+	for _, want := range []string{"cmd_r", "4 entries", "k", "Kitty", "Activity Monitor", "复制今日日期", MarkRunning, MarkDone, MarkFailed} {
+		if !slices.Contains(tt.Texts(), want) {
+			t.Errorf("missing %q in %q", want, tt.Texts())
+		}
+	}
+	if size[0] <= 0 || size[1] <= 0 {
+		t.Fatalf("size %v", *size)
+	}
+	// At the size it asks for, everything fits.
+	tt.SetSize(int(math.Ceil(float64(size[0]))), int(math.Ceil(float64(size[1]))))
+	tt.Frame()
+	savePNG(t, tt, "fit")
+	for _, text := range []string{"Activity Monitor", "4 entries", "复制今日日期"} {
+		r, ok := tt.Find(text)
+		fits := ok && r.X+r.W <= size[0] && r.Y+r.H <= size[1]
+		if !fits {
+			t.Errorf("%q at %+v does not fit %v", text, r, *size)
+		}
+	}
+
+	// Marks follow the snapshot on the next frame.
+	for i := range s.Entries {
+		s.Entries[i].Status = leader.Idle
+	}
+	tt.Frame()
+	for _, m := range []string{MarkRunning, MarkDone, MarkFailed} {
+		if slices.Contains(tt.Texts(), m) {
+			t.Errorf("idle entries show %q", m)
+		}
+	}
+}
+
+func TestOrderAndColumns(t *testing.T) {
+	keys := "abcdefghijklmnopqrstuvwxyz"
+	var s leader.Snapshot
+	s = leader.Snapshot{Active: true, Key: "cmd_r"}
+	for i := range 12 {
+		s.Entries = append(s.Entries, leader.EntryState{Key: keys[i : i+1], Title: fmt.Sprintf("Title %d", i)})
+	}
+	tt, size := tester(t, &s)
+	oneColumn := *size
+	first, _ := tt.Find("Title 0")
+	last, _ := tt.Find("Title 11")
+	if first.X != last.X || last.Y <= first.Y {
+		t.Fatalf("12 entries not in one column: %+v %+v", first, last)
+	}
+
+	s.Entries = append(s.Entries, leader.EntryState{Key: "m", Title: "Title 12"})
+	tt.Frame()
+	savePNG(t, tt, "columns")
+	a, _ := tt.Find("Title 0")
+	b, _ := tt.Find("Title 7")
+	if b.X <= a.X || b.Y != a.Y {
+		t.Fatalf("13 entries not in two columns of 7 and 6: %+v %+v", a, b)
+	}
+	if size[0] <= oneColumn[0] || size[1] >= oneColumn[1] {
+		t.Fatalf("two columns sized %v, one %v", *size, oneColumn)
+	}
+}
+
+func TestSplit(t *testing.T) {
+	for n, want := range map[int][]int{1: {1}, 12: {12}, 13: {7, 6}, 24: {12, 12}, 25: {9, 9, 7}} {
+		var got []int
+		for _, col := range split(make([]leader.EntryState, n)) {
+			got = append(got, len(col))
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("split(%d) = %v, want %v", n, got, want)
+		}
+	}
+}
+
+func TestParseError(t *testing.T) {
+	s := leader.Snapshot{Active: true, Key: "cmd_r", Err: errors.New(`cmd_r.md: ## k B: duplicate key "k"`)}
+	tt, _ := tester(t, &s)
+	savePNG(t, tt, "error")
+	if !tt.HasText("duplicate key") || !tt.HasText("cmd_r") || !tt.HasText("0 entries") {
+		t.Fatalf("texts %q", tt.Texts())
+	}
+}

@@ -22,7 +22,7 @@ type Table struct {
 // or parse are skipped and reported in Errors. A missing dir is empty.
 func Load(dir string) Table {
 	var t Table
-	dir = resolveRoot(dir)
+	dir = ResolveRoot(dir)
 	index := map[string]int{}
 	fail := func(err error) {
 		t.Errors = append(t.Errors, err)
@@ -63,10 +63,10 @@ func Load(dir string) Table {
 	return t
 }
 
-// resolveRoot follows a symlinked root, because WalkDir does not descend
+// ResolveRoot follows a symlinked root, because WalkDir does not descend
 // into one. It returns dir unchanged when resolution fails, so a missing
 // dir keeps its usual handling.
-func resolveRoot(dir string) string {
+func ResolveRoot(dir string) string {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return dir

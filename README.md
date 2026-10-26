@@ -64,6 +64,14 @@ go tool mygo dev -sign "Burin Signing"       # mygo.json already sets it for myg
 tccutil reset Accessibility io.github.liukun.burin   # once, to drop the stale ad-hoc entry
 ```
 
+## Open at login
+
+The tray menu's "Open at Login" registers the app as a login item
+(System Settings > General > Login Items). It needs the packaged app:
+build it with `go tool mygo build` and run the bundle from /Applications.
+Under `mygo dev` the item is disabled, so the temporary dev bundle is
+never registered.
+
 ## Known limitations
 
 - A snippet whose placeholder moves focus (e.g. `{shell(open -a X)}` followed by more text) pastes into the newly focused app.

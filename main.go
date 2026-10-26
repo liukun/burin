@@ -227,6 +227,29 @@ func (b *burin) newLeader(run func(leader.Config, leader.Entry) error) *leader.L
 	}
 }
 
+// openAtLoginItem is the checkbox that registers the app as a login item.
+// A development build is a temporary bundle no login item should point
+// at, so the item is disabled there.
+func openAtLoginItem() *mygo.MenuItem {
+	if mygo.IsDev() {
+		return &mygo.MenuItem{Label: "Open at Login (dev build)", Disabled: true}
+	}
+	return &mygo.MenuItem{
+		Label:   "Open at Login",
+		Type:    mygo.MenuItemCheckbox,
+		Checked: mygo.App.OpenAtLogin(),
+		// Checked is already toggled when Click runs.
+		Click: func(it *mygo.MenuItem, _ *mygo.Window) {
+			open := it.IsChecked()
+			if err := mygo.App.SetOpenAtLogin(open); err != nil {
+				log.Printf("open at login: %v", err)
+				notify("Open at Login", err.Error())
+				it.SetChecked(!open)
+			}
+		},
+	}
+}
+
 // notify shows a system notification without blocking the caller, which
 // may be the event tap thread. Notification.Show hops to the main thread
 // itself and waits for the user's permission on first use.
@@ -366,6 +389,7 @@ func main() {
 		items = append(items,
 			mygo.Separator(),
 			&mygo.MenuItem{Label: "Reload", Click: func(*mygo.MenuItem, *mygo.Window) { go b.reload() }},
+			openAtLoginItem(),
 			&mygo.MenuItem{Label: "Open Snippets Folder", Click: func(*mygo.MenuItem, *mygo.Window) {
 				if err := mygo.Shell.OpenPath(b.snippetsDir); err != nil {
 					log.Print(err)
@@ -374,10 +398,14 @@ func main() {
 			mygo.Separator(),
 			&mygo.MenuItem{Role: mygo.RoleQuit},
 		)
+		title := "Burin"
+		if mygo.IsDev() {
+			title = "Burin (dev)"
+		}
 		tray, err := mygo.NewTray(mygo.TrayOptions{
 			ID:      "burin",
-			Title:   "Burin",
-			ToolTip: "Burin",
+			Title:   title,
+			ToolTip: title,
 			Menu:    mygo.NewMenu(items),
 		})
 		if err != nil {

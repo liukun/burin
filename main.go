@@ -23,9 +23,9 @@ import (
 )
 
 const (
-	needAccessibility = "Grant Accessibility and Input Monitoring, then relaunch"
-	maxNotifyBody     = 300
-	maxCopiedPreview  = 40
+	grantAccessibility = "Grant Accessibility (click again to relaunch)"
+	maxNotifyBody      = 300
+	maxCopiedPreview   = 40
 )
 
 // burin holds the running app's snippet and leader state.
@@ -331,11 +331,13 @@ func main() {
 		snippetsWatcher := watch(b.snippetsDir, b.reloadSnippets)
 		leadersWatcher := watch(b.leadersDir, b.reloadLeaders)
 
-		tapOK := eventtap.AccessibilityTrusted(true)
+		// Only check here: the Grant item below prompts on request.
+		// Accessibility covers Input Monitoring, which an active tap
+		// could not run on alone.
+		trusted := eventtap.AccessibilityTrusted(false)
 		tap, err := b.listen()
 		if err != nil {
 			log.Print(err)
-			tapOK = false
 		}
 		mygo.App.OnQuit(func() {
 			b.ex.Stop()
@@ -350,8 +352,16 @@ func main() {
 		})
 
 		items := []*mygo.MenuItem{b.status, b.leaderStatus}
-		if !tapOK {
-			items = append(items, &mygo.MenuItem{Label: needAccessibility, Disabled: true})
+		if !trusted {
+			items = append(items, &mygo.MenuItem{Label: grantAccessibility, Click: func(*mygo.MenuItem, *mygo.Window) {
+				// Granted meanwhile: the tap needs a fresh process to see it.
+				if eventtap.AccessibilityTrusted(false) {
+					notify("Accessibility granted", "Relaunching Burin")
+					mygo.App.Relaunch()
+					return
+				}
+				go eventtap.AccessibilityTrusted(true)
+			}})
 		}
 		items = append(items,
 			mygo.Separator(),

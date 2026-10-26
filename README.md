@@ -47,6 +47,23 @@ go tool mygo vet .
 go tool mygo build      # output in build/darwin-arm64/
 ```
 
+### Permissions and signing
+
+The event tap needs Accessibility (which also covers Input Monitoring).
+The app only checks at startup; a "Grant Accessibility" tray item
+triggers the system prompt when it is missing, and relaunches the app
+when clicked again after granting.
+
+macOS remembers the grant per code signature, and an ad-hoc signature
+changes with every build. Create a self-signed identity once so it
+sticks:
+
+```bash
+scripts/signing-cert.sh                      # creates "Burin Signing" in the login keychain
+go tool mygo dev -sign "Burin Signing"       # mygo.json already sets it for mygo build
+tccutil reset Accessibility io.github.liukun.burin   # once, to drop the stale ad-hoc entry
+```
+
 ## Known limitations
 
 - A snippet whose placeholder moves focus (e.g. `{shell(open -a X)}` followed by more text) pastes into the newly focused app.

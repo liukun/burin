@@ -5,6 +5,7 @@
   "out": "build",
   "macos": {
     "minimumSystemVersion": "13.0",
+    "signingIdentity": "Burin Signing",
     "infoPlist": {
       "LSUIElement": true,
       "NSHumanReadableCopyright": "Copyright 2026 liukun"

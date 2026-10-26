@@ -60,6 +60,13 @@ var triggers = map[string]trigger{
 	"shift_l": {56, deviceLShift},
 	"shift_r": {60, deviceRShift},
 	"fn":      {63, flagSecondaryFn},
+	// Keypad operators: plain keys that no text needs.
+	"kp_minus":    {keycode: 78},
+	"kp_plus":     {keycode: 69},
+	"kp_multiply": {keycode: 67},
+	"kp_divide":   {keycode: 75},
+	"kp_enter":    {keycode: 76},
+	"kp_clear":    {keycode: 71},
 }
 
 // entryKeys maps the key names an entry may use to virtual keycodes of

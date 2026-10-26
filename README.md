@@ -11,7 +11,8 @@ entry's key while holding to run it. Release the trigger to hide the HUD. One ho
 run several entries, and every key pressed while holding is swallowed.
 
 Each file in `~/.config/burin/leaders/` is one leader, named after its trigger key:
-`cmd_l cmd_r opt_l opt_r ctrl_l ctrl_r shift_l shift_r fn f1`…`f20` (e.g. `cmd_r.md`).
+`cmd_l cmd_r opt_l opt_r ctrl_l ctrl_r shift_l shift_r fn f1`…`f20` and the keypad
+operators `kp_minus kp_plus kp_multiply kp_divide kp_enter kp_clear` (e.g. `cmd_r.md`).
 The format is the snippet format with `## <key> <title>` headings; text before the first
 heading is a comment:
 

@@ -52,21 +52,25 @@ func TestLoad(t *testing.T) {
 	write(t, filepath.Join(dir, "cmd_r.md"), "## k Kitty\na\n")
 	write(t, filepath.Join(dir, "F18.md"), "## a A\nx\n## a B\ny\n")
 	write(t, filepath.Join(dir, "caps.md"), "## k Kitty\na\n")
+	write(t, filepath.Join(dir, "kp_minus.md"), "## d Date\n{date}\n")
 	write(t, filepath.Join(dir, "notes.txt"), "## k Kitty\na\n")
 	if err := os.Mkdir(filepath.Join(dir, "opt_l.md"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	s := Load(dir)
-	if len(s.Configs) != 2 {
+	if len(s.Configs) != 3 {
 		t.Fatalf("configs %+v", s.Configs)
 	}
-	f18, cmdR := s.Configs[0], s.Configs[1]
+	f18, cmdR, kpMinus := s.Configs[0], s.Configs[1], s.Configs[2]
 	if f18.Key != "f18" || f18.Err == nil || !strings.Contains(f18.Err.Error(), "duplicate") {
 		t.Errorf("f18 = %+v", f18)
 	}
 	if cmdR.Key != "cmd_r" || cmdR.Err != nil || len(cmdR.Entries) != 1 || cmdR.trigger.keycode != 54 {
 		t.Errorf("cmd_r = %+v", cmdR)
+	}
+	if kpMinus.Key != "kp_minus" || kpMinus.Err != nil || kpMinus.trigger.keycode != 78 || kpMinus.trigger.mask != 0 {
+		t.Errorf("kp_minus = %+v", kpMinus)
 	}
 	if len(s.Errors) != 1 || !strings.Contains(s.Errors[0].Error(), "caps") {
 		t.Errorf("errors %v", s.Errors)

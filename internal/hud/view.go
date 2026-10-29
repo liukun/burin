@@ -17,9 +17,11 @@ const (
 	fontSize  = 13
 	padding   = 12
 	headerGap = 8
-	// columnGap is between the columns of the list layout, and between
-	// the cells of a row in the rows layout.
-	columnGap   = 12
+	// columnGap is between the columns of the list layout.
+	columnGap = 12
+	// rowCellGap is between the cells of a row in the rows layout: small,
+	// as each cell's padding and empty mark slot already set it apart.
+	rowCellGap  = 0
 	rowGap      = 2
 	rowPaddingX = 6
 	rowPaddingY = 2
@@ -157,7 +159,7 @@ func (m *metrics) measureRows(entries []leader.EntryState, entryW func(leader.En
 	m.rows = splitRows(entries)
 	for _, row := range m.rows {
 		widths := make([]float32, len(row))
-		rowW := float32(len(row)-1) * columnGap
+		rowW := float32(len(row)-1) * rowCellGap
 		for j, e := range row {
 			widths[j] = entryW(e)
 			rowW += widths[j]
@@ -237,7 +239,7 @@ func entries(c *ui.Context, t *ui.Theme, layout leader.Layout, m metrics) {
 func entryRows(c *ui.Context, t *ui.Theme, m metrics) {
 	ui.Column(c).Gap(rowGap).AlignItems(ui.Start).Children(func() {
 		for i, row := range m.rows {
-			ui.Row(c.Key(i)).Gap(columnGap).Children(func() {
+			ui.Row(c.Key(i)).Gap(rowCellGap).Children(func() {
 				for j, e := range row {
 					entry(c.Key(e.Key), t, e, m.cellW[i][j], m)
 				}

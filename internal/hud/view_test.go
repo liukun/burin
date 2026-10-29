@@ -181,7 +181,7 @@ func TestRowsLayout(t *testing.T) {
 		t.Fatalf("rows %v", m.rows)
 	}
 	rowW := func(widths []float32) float32 {
-		w := float32(len(widths)-1) * columnGap
+		w := float32(len(widths)-1) * rowCellGap
 		for _, cw := range widths {
 			w += cw
 		}

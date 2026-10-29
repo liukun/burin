@@ -33,6 +33,8 @@ const (
 	headInsertEventTap   = 0
 	tapOptionDefault     = 0
 	keyboardEventKeycode = 9
+	eventSourceUserData  = 42
+	keyboardEventRepeat  = 8
 	unicodeBufSize       = 16
 )
 
@@ -272,6 +274,17 @@ func (t *Tap) unregister() {
 // Keycode returns the virtual keycode of a keyboard event.
 func Keycode(event uintptr) int64 {
 	return cgEventGetIntegerValueField(event, keyboardEventKeycode)
+}
+
+// Autorepeat reports whether a keyDown is the auto-repeat of a held key.
+func Autorepeat(event uintptr) bool {
+	return cgEventGetIntegerValueField(event, keyboardEventRepeat) != 0
+}
+
+// UserData returns the kCGEventSourceUserData of an event, which a
+// poster may set to recognize its own events.
+func UserData(event uintptr) int64 {
+	return cgEventGetIntegerValueField(event, eventSourceUserData)
 }
 
 // Flags returns the modifier flags of an event.

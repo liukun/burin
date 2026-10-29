@@ -12,9 +12,9 @@ run several entries, and every key pressed while holding is swallowed.
 
 Each file in `~/.config/burin/leaders/` is one leader, named after its trigger key:
 `cmd_l cmd_r opt_l opt_r ctrl_l ctrl_r shift_l shift_r fn f1`…`f20` and the keypad
-operators `kp_minus kp_plus kp_multiply kp_divide kp_enter kp_clear` (e.g. `cmd_r.md`).
-The format is the snippet format with `## <key> <title>` headings; text before the first
-heading is a comment:
+operators `kp_minus kp_plus kp_multiply kp_divide kp_enter kp_clear`, and `tab` (e.g.
+`cmd_r.md`). The format is the snippet format with `## <key> <title>` headings; text before
+the first heading is a comment, except a `hold:` line:
 
 ```markdown
 ## k Kitty
@@ -32,7 +32,24 @@ and `f1`…`f20`, matched by physical (ANSI) position. The content is expanded l
 snippet's, with an extra `{reload}` that reloads snippets and leaders. A non-empty result
 is copied to the clipboard and announced; an empty one (`|null`) does nothing more.
 The HUD marks a running entry `●`, a finished one `✓` (for a second) and a failed one
-`✗`. Files that name no trigger key are skipped with a notification; a file that fails to
+`✗`. A file's own trigger key cannot be one of its entries.
+
+A `hold: <duration>` line before the first heading (`hold: 200ms`, `hold: 0.2s`) puts an
+ordinary trigger key in hold mode, so it keeps its usual function: a tap types the key as
+usual, and only holding it for the duration shows the HUD. Pressing another key before
+then types the trigger key followed by that key, and pressing the trigger together with
+Shift, Control, Option or Command (`cmd+tab`, `shift+tab`) leaves it alone. Without
+`hold:`, the trigger key is swallowed — a `tab.md` without it disables Tab everywhere.
+An invalid `hold:` value is shown as an error in the HUD and holds for 200ms; `hold:` in
+a modifier's file is an error, as modifiers keep their function anyway.
+
+```markdown
+hold: 200ms
+## k Kitty
+{shell(open -a kitty)|null}
+```
+
+Files that name no trigger key are skipped with a notification; a file that fails to
 parse shows its error in the HUD. With no leader files, trigger keys behave as usual.
 The directory is watched, and the tray's Reload reloads it too.
 

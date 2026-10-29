@@ -22,6 +22,17 @@ const (
 	flagSecondaryFn = 0x00800000
 )
 
+// Generic modifier bits of CGEventFlags, set for either key of a pair.
+const (
+	flagShift = 1 << 17
+	flagCtrl  = 1 << 18
+	flagAlt   = 1 << 19
+	flagCmd   = 1 << 20
+	// shortcutFlags are the modifiers that make a key press a shortcut:
+	// a hold-mode trigger pressed with one of them is left alone.
+	shortcutFlags = flagShift | flagCtrl | flagAlt | flagCmd
+)
+
 // trigger is a key that holds a leader.
 type trigger struct {
 	keycode int64
@@ -67,6 +78,8 @@ var triggers = map[string]trigger{
 	"kp_divide":   {keycode: 75},
 	"kp_enter":    {keycode: 76},
 	"kp_clear":    {keycode: 71},
+	// Tab, usually with hold: in its file so a tap still types a Tab.
+	"tab": {keycode: 48},
 }
 
 // entryKeys maps the key names an entry may use to virtual keycodes of

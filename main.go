@@ -16,6 +16,7 @@ import (
 	"burin/internal/eventtap"
 	"burin/internal/expander"
 	"burin/internal/hud"
+	"burin/internal/keys"
 	"burin/internal/leader"
 	"burin/internal/pasteboard"
 	"burin/internal/placeholder"
@@ -173,8 +174,15 @@ func chain(handlers ...eventtap.Handler) eventtap.Handler {
 	}
 }
 
+// handleLeader offers key events to the leader. The keys the leader types
+// itself (keys.Stroke) come back through the tap and skip it, so a typed
+// trigger cannot hold it again; they go on to the expander like typed ones.
 func (b *burin) handleLeader(eventType uint32, event uintptr) bool {
-	return b.leader.Handle(eventType, eventtap.Keycode(event), eventtap.Flags(event))
+	if eventtap.UserData(event) == keys.SyntheticMark {
+		return false
+	}
+	repeat := eventType == eventtap.EventKeyDown && eventtap.Autorepeat(event)
+	return b.leader.Handle(eventType, eventtap.Keycode(event), eventtap.Flags(event), repeat)
 }
 
 // handleExpander feeds keyDown events to the expander.
@@ -222,6 +230,7 @@ func (b *burin) newLeader(run func(leader.Config, leader.Entry) error) *leader.L
 			showHUD()
 		},
 		OnHide:   withHUD((*hud.HUD).Hide),
+		OnTap:    keys.Stroke,
 		OnChange: withHUD((*hud.HUD).Invalidate),
 		OnRun:    run,
 	}

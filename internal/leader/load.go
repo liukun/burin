@@ -3,10 +3,13 @@
 package leader
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	"burin/internal/snippet"
@@ -22,6 +25,13 @@ type Entry struct {
 	keycode int64
 }
 
+// DefaultHoldDelay is the hold delay of a file whose hold: line is
+// invalid: a typo must not make a tap of its trigger key do nothing.
+const DefaultHoldDelay = 200 * time.Millisecond
+
+// holdLine is the preamble line that puts a leader in hold mode.
+var holdLine = regexp.MustCompile(`^hold:\s*(.+)$`)
+
 // Config is one leader file: the trigger key it is named after and its
 // entries in file order. Err is set when the file could not be read or
 // parsed; the leader still holds, and shows the error instead of entries.
@@ -30,6 +40,11 @@ type Config struct {
 	File    string
 	Entries []Entry
 	Err     error
+	// HoldDelay is how long the trigger must be held before the leader
+	// shows, set by a "hold:" line in the preamble. Zero means the leader
+	// shows as soon as the trigger goes down. In hold mode a shorter tap
+	// types the trigger key as usual.
+	HoldDelay time.Duration
 
 	trigger trigger
 }
@@ -44,7 +59,8 @@ type Set struct {
 
 // Load reads the .md files directly in dir, in lexical order. Each file
 // is named after its trigger key (cmd_r.md) and holds "## <key> <title>"
-// headings in snippet format. A missing dir is empty.
+// headings in snippet format, with an optional "hold: <duration>" line
+// before the first heading. A missing dir is empty.
 func Load(dir string) Set {
 	var s Set
 	dir = snippet.ResolveRoot(dir)
@@ -69,9 +85,7 @@ func Load(dir string) Set {
 			s.Errors = append(s.Errors, fmt.Errorf("%s: %q is not a trigger key", path, key))
 			continue
 		}
-		c := Config{Key: key, File: path, trigger: t}
-		c.Entries, c.Err = loadFile(path)
-		s.Configs = append(s.Configs, c)
+		s.Configs = append(s.Configs, loadFile(key, t, path))
 	}
 	return s
 }
@@ -82,22 +96,90 @@ func isFile(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-func loadFile(path string) ([]Entry, error) {
+func loadFile(key string, t trigger, path string) Config {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return Config{Key: key, File: path, Err: err, trigger: t}
 	}
-	entries, err := Parse(string(data))
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	c := parseConfig(key, t, string(data))
+	c.File = path
+	if c.Err == nil {
+		return c
 	}
-	return entries, nil
+	c.Err = fmt.Errorf("%s: %w", filepath.Base(path), c.Err)
+	return c
 }
 
-// Parse reads the entries of a leader file. It is snippet.Parse with the
-// heading split into the entry's key, its first word, and its title, the
-// rest. Keys are case-insensitive and must be unique.
-func Parse(data string) ([]Entry, error) {
+// parseConfig parses the leader file of trigger t, named key.
+func parseConfig(key string, t trigger, data string) Config {
+	c := Config{Key: key, trigger: t}
+	c.Entries, c.HoldDelay, c.Err = Parse(data)
+	// A modifier never reaches the app as a keystroke of its own, so
+	// there is no tap to keep: the leader holds as usual.
+	if t.isModifier() && c.HoldDelay > 0 {
+		c.HoldDelay = 0
+		c.Err = errors.Join(c.Err, errors.New("hold: is only for ordinary trigger keys, not modifiers"))
+	}
+	if c.Err != nil {
+		return c
+	}
+	// The trigger's own keyDown while it is held is its auto-repeat, so
+	// such an entry could never run.
+	for _, e := range c.Entries {
+		if e.keycode == t.keycode {
+			c.Err = fmt.Errorf("## %s: the trigger key %q cannot be an entry", e.Key, key)
+			return c
+		}
+	}
+	return c
+}
+
+// Parse reads the entries of a leader file and its hold delay, zero
+// without a hold: line. The entries are snippet.Parse with the heading
+// split into the entry's key, its first word, and its title, the rest.
+// Keys are case-insensitive and must be unique.
+//
+// An invalid hold: line is an error, but the hold delay is then
+// DefaultHoldDelay and the entries are still returned.
+func Parse(data string) ([]Entry, time.Duration, error) {
+	hold, holdErr := parseHold(data)
+	entries, err := parseEntries(data)
+	if err != nil {
+		return nil, hold, errors.Join(err, holdErr)
+	}
+	return entries, hold, holdErr
+}
+
+// parseHold reads the hold: line of the preamble, the lines before the
+// first heading, which snippet.Parse discards. Other preamble lines are
+// a comment.
+func parseHold(data string) (time.Duration, error) {
+	var hold time.Duration
+	for line := range strings.Lines(strings.ReplaceAll(data, "\r\n", "\n")) {
+		if strings.HasPrefix(line, "## ") {
+			break
+		}
+		m := holdLine.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			continue
+		}
+		// hold is only ever set positive, so nonzero means seen.
+		if hold != 0 {
+			return DefaultHoldDelay, errors.New("duplicate hold: line")
+		}
+		d, err := time.ParseDuration(m[1])
+		if err != nil {
+			return DefaultHoldDelay, fmt.Errorf("hold: %w", err)
+		}
+		if d <= 0 {
+			return DefaultHoldDelay, fmt.Errorf("hold: %s is not positive", m[1])
+		}
+		hold = d
+	}
+	return hold, nil
+}
+
+func parseEntries(data string) ([]Entry, error) {
 	snippets, err := snippet.Parse(data)
 	if err != nil {
 		return nil, err

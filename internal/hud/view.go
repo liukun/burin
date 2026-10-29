@@ -29,6 +29,9 @@ const (
 	slack = 2
 )
 
+// keyColor tells an entry's key from its title.
+var keyColor = ui.Hex("#73d94d")
+
 // Marks of the entry statuses. Idle has none.
 const (
 	MarkRunning = "●"
@@ -139,7 +142,8 @@ func split(entries []leader.EntryState) [][]leader.EntryState {
 }
 
 func header(c *ui.Context, t *ui.Theme, s leader.Snapshot, m metrics) {
-	titleColor := t.Text
+	// The title is bold already; muted, it does not outshine the entries.
+	titleColor := t.TextMuted
 	if s.Err != nil {
 		titleColor = t.Danger
 	}
@@ -169,7 +173,7 @@ func entry(c *ui.Context, t *ui.Theme, e leader.EntryState, m metrics) {
 	}
 	row.Children(func() {
 		mark(c, t, e.Status, m.markW)
-		ui.Text(c, e.Key).Font(monospace).FontSize(fontSize).Width(m.keyW).NoWrap()
+		ui.Text(c, e.Key).Font(monospace).FontSize(fontSize).TextColor(keyColor).Width(m.keyW).NoWrap()
 		ui.Text(c, e.Title).FontSize(fontSize).NoWrap()
 	})
 }

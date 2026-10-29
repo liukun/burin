@@ -17,6 +17,8 @@ const (
 	cornerRadius  = 10
 	// topMargin is the distance between the work area's top and the HUD.
 	topMargin = 8
+	// opacity is the HUD's when shown, letting what it covers show through.
+	opacity = 0.8
 )
 
 // HUD is the leader flyout. Its methods are safe from any goroutine and
@@ -29,6 +31,9 @@ type HUD struct {
 	// width and height are the content size last asked of the window;
 	// main thread only.
 	width, height int
+	// revealing is set while the flyout is shown invisibly, until a frame
+	// built it at the size of the held leader; main thread only.
+	revealing bool
 }
 
 // New creates the hidden flyout. It is anchored to tray, which lets it
@@ -54,9 +59,14 @@ func New(tray *mygo.Tray, snapshot func() leader.Snapshot) *HUD {
 	return h
 }
 
-// Show shows the flyout without taking the keyboard.
+// Show shows the flyout without taking the keyboard. It is shown
+// invisibly first, so that a frame can size it to the held leader, and
+// becomes visible from view once it fits: showing it at the size of the
+// last leader and resizing it in sight flashed.
 func (h *HUD) Show() {
 	h.win.Update(func() {
+		h.revealing = true
+		h.win.SetOpacity(0)
 		h.win.ShowInactive()
 		h.place()
 	})
@@ -96,13 +106,19 @@ func (h *HUD) view(c *ui.Context) {
 	}
 	width, height := int(math.Ceil(float64(w))), int(math.Ceil(float64(ht)))
 	sizeChanged := width != h.width || height != h.height
-	if !sizeChanged {
+	// Not while the frame builds: Update runs it after, in order.
+	if sizeChanged {
+		h.width, h.height = width, height
+		h.win.Update(func() {
+			h.win.SetContentSize(width, height)
+			h.place()
+		})
 		return
 	}
-	h.width, h.height = width, height
-	// Not while the frame builds: Update runs it after, in order.
-	h.win.Update(func() {
-		h.win.SetContentSize(width, height)
-		h.place()
-	})
+	if !h.revealing {
+		return
+	}
+	// This frame fits: it drew the content at the leader's size.
+	h.revealing = false
+	h.win.Update(func() { h.win.SetOpacity(opacity) })
 }

@@ -236,6 +236,20 @@ func (b *burin) newLeader(run func(leader.Config, leader.Entry) error) *leader.L
 	}
 }
 
+// folderItem is a status line of the tray menu that opens dir, so the
+// counts lead to the files they count. A missing dir is created first.
+func folderItem(label, dir string) *mygo.MenuItem {
+	return &mygo.MenuItem{Label: label, Click: func(*mygo.MenuItem, *mygo.Window) {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Print(err)
+			return
+		}
+		if err := mygo.Shell.OpenPath(dir); err != nil {
+			log.Print(err)
+		}
+	}}
+}
+
 // openAtLoginItem is the checkbox that registers the app as a login item.
 // A development build is a temporary bundle no login item should point
 // at, so the item is disabled there.
@@ -341,13 +355,13 @@ func main() {
 	scriptsDir := filepath.Join(dir, "scripts")
 	loginPath := placeholder.StartLoginPath()
 	b := &burin{
-		snippetsDir:  filepath.Join(dir, "snippets"),
-		leadersDir:   filepath.Join(dir, "leaders"),
-		eval:         newEvaluator(scriptsDir, loginPath),
-		ex:           expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
-		status:       &mygo.MenuItem{Label: "Loading snippets", Disabled: true},
-		leaderStatus: &mygo.MenuItem{Label: "Loading leaders", Disabled: true},
+		snippetsDir: filepath.Join(dir, "snippets"),
+		leadersDir:  filepath.Join(dir, "leaders"),
+		eval:        newEvaluator(scriptsDir, loginPath),
+		ex:          expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
 	}
+	b.status = folderItem("Loading snippets", b.snippetsDir)
+	b.leaderStatus = folderItem("Loading leaders", b.leadersDir)
 	leaderEval := b.newLeaderEvaluator(scriptsDir, loginPath)
 	b.leader = b.newLeader(leaderAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed))
 	for _, d := range []string{b.snippetsDir, b.leadersDir} {
@@ -399,11 +413,6 @@ func main() {
 			mygo.Separator(),
 			&mygo.MenuItem{Label: "Reload", Click: func(*mygo.MenuItem, *mygo.Window) { go b.reload() }},
 			openAtLoginItem(),
-			&mygo.MenuItem{Label: "Open Snippets Folder", Click: func(*mygo.MenuItem, *mygo.Window) {
-				if err := mygo.Shell.OpenPath(b.snippetsDir); err != nil {
-					log.Print(err)
-				}
-			}},
 			mygo.Separator(),
 			&mygo.MenuItem{Role: mygo.RoleQuit},
 		)

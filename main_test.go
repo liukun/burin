@@ -8,6 +8,7 @@ import (
 	"burin/internal/leader"
 	"burin/internal/placeholder"
 	"burin/internal/snippet"
+	"burin/internal/windowrules"
 )
 
 func TestExpanderSnippets(t *testing.T) {
@@ -50,6 +51,19 @@ func TestLeaderStatusText(t *testing.T) {
 		Errors:  []error{errors.New("not a trigger key")},
 	}
 	if got := leaderStatusText(set); got != "2 leaders, 2 errors" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestWindowRulesStatusText(t *testing.T) {
+	set := windowrules.Set{
+		Config: windowrules.Config{
+			Pins:    make([]windowrules.Rule, 3),
+			Margins: make([]windowrules.MarginRule, 1),
+		},
+		Errors: []error{errors.New("x")},
+	}
+	if got := windowRulesStatusText(set); got != "4 window rules, 1 errors" {
 		t.Fatalf("got %q", got)
 	}
 }

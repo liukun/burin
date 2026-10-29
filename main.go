@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"log"
@@ -23,6 +24,11 @@ import (
 	"burin/internal/snippet"
 	"burin/internal/windowrules"
 )
+
+// trayIcon is drawn by scripts/tray-icon.swift.
+//
+//go:embed resources/tray.png
+var trayIcon []byte
 
 const (
 	grantAccessibility = "Grant Accessibility (click again to relaunch)"
@@ -452,15 +458,18 @@ func main() {
 			mygo.Separator(),
 			&mygo.MenuItem{Role: mygo.RoleQuit},
 		)
-		title := "Burin"
+		// The dev build titles its icon, to tell it from the installed app.
+		tip, title := "Burin", ""
 		if mygo.IsDev() {
-			title = "Burin (dev)"
+			tip, title = "Burin (dev)", "dev"
 		}
 		tray, err := mygo.NewTray(mygo.TrayOptions{
-			ID:      "burin",
-			Title:   title,
-			ToolTip: title,
-			Menu:    mygo.NewMenu(items),
+			ID:             "burin",
+			Icon:           trayIcon,
+			IconIsTemplate: true,
+			Title:          title,
+			ToolTip:        tip,
+			Menu:           mygo.NewMenu(items),
 		})
 		if err != nil {
 			log.Fatal(err)

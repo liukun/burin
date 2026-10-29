@@ -10,13 +10,15 @@ import (
 
 // Layout, in DIPs.
 const (
-	// MaxRows is the most entries a column holds; more entries make more
-	// columns, as balanced as they go.
+	// MaxRows is the most entries a column of the list layout holds; more
+	// entries make more columns, as balanced as they go.
 	MaxRows = 12
 
-	fontSize    = 13
-	padding     = 12
-	headerGap   = 8
+	fontSize  = 13
+	padding   = 12
+	headerGap = 8
+	// columnGap is between the columns of the list layout, and between
+	// the cells of a row in the rows layout.
 	columnGap   = 12
 	rowGap      = 2
 	rowPaddingX = 6
@@ -54,7 +56,7 @@ func Build(c *ui.Context, s leader.Snapshot) (width, height float32) {
 		case s.Err != nil:
 			ui.Text(c, s.Err.Error()).FontSize(fontSize).TextColor(t.Danger).Wrap().Width(m.errW)
 		case len(s.Entries) > 0:
-			entries(c, t, m)
+			entries(c, t, s.Layout, m)
 		}
 	})
 	return m.width, m.height
@@ -63,10 +65,18 @@ func Build(c *ui.Context, s leader.Snapshot) (width, height float32) {
 // metrics are the sizes the layout is built from, measured from the text
 // so that the window can be sized to fit it.
 type metrics struct {
-	lineH, rowH   float32
-	markW, keyW   float32
-	columns       [][]leader.EntryState
-	columnW       []float32
+	lineH, rowH float32
+	// markW and keyW are the same across all entries, so that they line
+	// up.
+	markW, keyW float32
+	// columns holds the entries of the list layout, top to bottom, each
+	// column columnW wide.
+	columns [][]leader.EntryState
+	columnW []float32
+	// rows holds the entries of the rows layout, left to right, each cell
+	// as wide as its title needs.
+	rows          [][]leader.EntryState
+	cellW         [][]float32
 	errW, errH    float32
 	width, height float32
 }
@@ -107,26 +117,61 @@ func measure(c *ui.Context, s leader.Snapshot) metrics {
 			w, _ := text(e.Key, monospace, 0)
 			m.keyW = max(m.keyW, w)
 		}
-		m.columns = split(s.Entries)
-		for i, col := range m.columns {
-			w := float32(0)
-			for _, e := range col {
-				tw, _ := text(e.Title, "", 0)
-				w = max(w, tw)
-			}
-			colW := 2*rowPaddingX + m.markW + cellGap + m.keyW + cellGap + w + slack
-			m.columnW = append(m.columnW, colW)
-			contentW += colW
-			if i > 0 {
-				contentW += columnGap
-			}
+		// entryW is the width of an entry's row of mark, key and title.
+		entryW := func(e leader.EntryState) float32 {
+			tw, _ := text(e.Title, "", 0)
+			return 2*rowPaddingX + m.markW + cellGap + m.keyW + cellGap + tw + slack
 		}
-		rows := float32(len(m.columns[0]))
-		contentH = headerGap + rows*m.rowH + (rows-1)*rowGap
+		if s.Layout == leader.LayoutRows {
+			contentW, contentH = m.measureRows(s.Entries, entryW)
+		} else {
+			contentW, contentH = m.measureColumns(s.Entries, entryW)
+		}
+		contentH += headerGap
 	}
 	m.width = 2*padding + max(headerW, contentW)
 	m.height = 2*padding + m.lineH + contentH
 	return m
+}
+
+// measureColumns lays entries out in columns and returns their size.
+func (m *metrics) measureColumns(entries []leader.EntryState, entryW func(leader.EntryState) float32) (width, height float32) {
+	m.columns = split(entries)
+	for i, col := range m.columns {
+		colW := float32(0)
+		for _, e := range col {
+			colW = max(colW, entryW(e))
+		}
+		m.columnW = append(m.columnW, colW)
+		width += colW
+		if i > 0 {
+			width += columnGap
+		}
+	}
+	return width, m.stackH(len(m.columns[0]))
+}
+
+// measureRows lays entries out in rows and returns their size: as wide
+// as the widest row.
+func (m *metrics) measureRows(entries []leader.EntryState, entryW func(leader.EntryState) float32) (width, height float32) {
+	m.rows = splitRows(entries)
+	for _, row := range m.rows {
+		widths := make([]float32, len(row))
+		rowW := float32(len(row)-1) * columnGap
+		for j, e := range row {
+			widths[j] = entryW(e)
+			rowW += widths[j]
+		}
+		m.cellW = append(m.cellW, widths)
+		width = max(width, rowW)
+	}
+	return width, m.stackH(len(m.rows))
+}
+
+// stackH is the height of n entry rows stacked.
+func (m *metrics) stackH(n int) float32 {
+	rows := float32(n)
+	return rows*m.rowH + (rows-1)*rowGap
 }
 
 // split puts entries in columns of at most MaxRows, in order, filling
@@ -139,6 +184,25 @@ func split(entries []leader.EntryState) [][]leader.EntryState {
 		out = append(out, entries[start:min(start+rows, len(entries))])
 	}
 	return out
+}
+
+// splitRows puts entries in rows, in order, starting a new row before
+// each entry with RowBreak. The first entry starts the first row either
+// way, so no row is empty.
+func splitRows(entries []leader.EntryState) [][]leader.EntryState {
+	if len(entries) == 0 {
+		return nil
+	}
+	var out [][]leader.EntryState
+	start := 0
+	for i, e := range entries {
+		startsRow := e.RowBreak && i > 0
+		if startsRow {
+			out = append(out, entries[start:i])
+			start = i
+		}
+	}
+	return append(out, entries[start:])
 }
 
 func header(c *ui.Context, t *ui.Theme, s leader.Snapshot, m metrics) {
@@ -154,20 +218,37 @@ func header(c *ui.Context, t *ui.Theme, s leader.Snapshot, m metrics) {
 	})
 }
 
-func entries(c *ui.Context, t *ui.Theme, m metrics) {
+func entries(c *ui.Context, t *ui.Theme, layout leader.Layout, m metrics) {
+	if layout == leader.LayoutRows {
+		entryRows(c, t, m)
+		return
+	}
 	ui.Row(c).Gap(columnGap).AlignItems(ui.Start).Children(func() {
 		for i, col := range m.columns {
 			ui.Column(c.Key(i)).Gap(rowGap).Width(m.columnW[i]).Children(func() {
 				for _, e := range col {
-					entry(c.Key(e.Key), t, e, m)
+					entry(c.Key(e.Key), t, e, m.columnW[i], m)
 				}
 			})
 		}
 	})
 }
 
-func entry(c *ui.Context, t *ui.Theme, e leader.EntryState, m metrics) {
-	row := ui.Row(c).AlignItems(ui.Center).Gap(cellGap).Height(m.rowH).PaddingX(rowPaddingX).Radius(4)
+func entryRows(c *ui.Context, t *ui.Theme, m metrics) {
+	ui.Column(c).Gap(rowGap).AlignItems(ui.Start).Children(func() {
+		for i, row := range m.rows {
+			ui.Row(c.Key(i)).Gap(columnGap).Children(func() {
+				for j, e := range row {
+					entry(c.Key(e.Key), t, e, m.cellW[i][j], m)
+				}
+			})
+		}
+	})
+}
+
+// entry builds the row of an entry, width wide.
+func entry(c *ui.Context, t *ui.Theme, e leader.EntryState, width float32, m metrics) {
+	row := ui.Row(c).AlignItems(ui.Center).Gap(cellGap).Width(width).Height(m.rowH).PaddingX(rowPaddingX).Radius(4)
 	if e.Status == leader.Running {
 		row.Background(t.Accent.Alpha(0.25))
 	}

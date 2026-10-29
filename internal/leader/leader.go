@@ -31,6 +31,8 @@ type EntryState struct {
 	Key    string
 	Title  string
 	Status Status
+	// RowBreak starts a new row in rows layout.
+	RowBreak bool
 }
 
 // Snapshot is the active leader as the HUD shows it.
@@ -39,6 +41,7 @@ type Snapshot struct {
 	Active  bool
 	Key     string
 	Err     error
+	Layout  Layout
 	Entries []EntryState
 }
 
@@ -498,10 +501,10 @@ func (l *Leader) Snapshot() Snapshot {
 	if l.active == nil {
 		return Snapshot{}
 	}
-	s := Snapshot{Active: true, Key: l.active.Key, Err: l.active.Err}
+	s := Snapshot{Active: true, Key: l.active.Key, Err: l.active.Err, Layout: l.active.Layout}
 	s.Entries = make([]EntryState, len(l.active.Entries))
 	for i, e := range l.active.Entries {
-		s.Entries[i] = EntryState{Key: e.Key, Title: e.Title, Status: l.status[i].status}
+		s.Entries[i] = EntryState{Key: e.Key, Title: e.Title, Status: l.status[i].status, RowBreak: e.RowBreak}
 	}
 	return s
 }

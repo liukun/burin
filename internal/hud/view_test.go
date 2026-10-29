@@ -129,3 +129,85 @@ func TestParseError(t *testing.T) {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 }
+
+func TestSplitRows(t *testing.T) {
+	var entries []leader.EntryState
+	for _, b := range []bool{true, false, true, true, false, false, true} {
+		entries = append(entries, leader.EntryState{RowBreak: b})
+	}
+	var got []int
+	for _, row := range splitRows(entries) {
+		got = append(got, len(row))
+	}
+	if want := []int{2, 1, 3, 1}; !slices.Equal(got, want) {
+		t.Errorf("splitRows = %v, want %v", got, want)
+	}
+	entries[0].RowBreak = false
+	if got := splitRows(entries[:2]); len(got) != 1 || len(got[0]) != 2 {
+		t.Errorf("splitRows without breaks = %v", got)
+	}
+	if got := splitRows(nil); len(got) != 0 {
+		t.Errorf("splitRows(nil) = %v", got)
+	}
+}
+
+func TestRowsLayout(t *testing.T) {
+	s := leader.Snapshot{Active: true, Key: "f18", Layout: leader.LayoutRows, Entries: []leader.EntryState{
+		{Key: "1", Title: "Chrome"},
+		{Key: "2", Title: "Yab", Status: leader.Running},
+		{Key: "q", Title: "Moshi", RowBreak: true},
+		{Key: "w", Title: "Activity Monitor and more"},
+		{Key: "e", Title: "Kitty"},
+	}}
+	tt, size := tester(t, &s)
+	savePNG(t, tt, "rows")
+	chrome, _ := tt.Find("Chrome")
+	yab, _ := tt.Find("Yab")
+	moshi, _ := tt.Find("Moshi")
+	kitty, _ := tt.Find("Kitty")
+	sameRow := yab.Y == chrome.Y && yab.X > chrome.X
+	if !sameRow {
+		t.Errorf("Chrome %+v and Yab %+v not in one row", chrome, yab)
+	}
+	nextRow := moshi.Y > chrome.Y && moshi.X == chrome.X && kitty.Y == moshi.Y
+	if !nextRow {
+		t.Errorf("Moshi %+v and Kitty %+v not starting the next row under %+v", moshi, kitty, chrome)
+	}
+
+	// Two rows, as wide as the second, the widest.
+	var m metrics
+	ui.NewTester(func(c *ui.Context) { m = measure(c, s) }, 600, 400)
+	if len(m.rows) != 2 || len(m.cellW[0]) != 2 || len(m.cellW[1]) != 3 {
+		t.Fatalf("rows %v", m.rows)
+	}
+	rowW := func(widths []float32) float32 {
+		w := float32(len(widths)-1) * columnGap
+		for _, cw := range widths {
+			w += cw
+		}
+		return w
+	}
+	if rowW(m.cellW[1]) <= rowW(m.cellW[0]) {
+		t.Fatalf("second row %v not wider than first %v", m.cellW[1], m.cellW[0])
+	}
+	if got, want := m.width, 2*padding+rowW(m.cellW[1]); got != want {
+		t.Errorf("width %v, want %v", got, want)
+	}
+	if got, want := m.height, 2*padding+m.lineH+headerGap+2*m.rowH+rowGap; got != want {
+		t.Errorf("height %v, want %v", got, want)
+	}
+	if *size != [2]float32{m.width, m.height} {
+		t.Errorf("Build size %v, measured %v x %v", *size, m.width, m.height)
+	}
+
+	// At the size it asks for, everything fits.
+	tt.SetSize(int(math.Ceil(float64(size[0]))), int(math.Ceil(float64(size[1]))))
+	tt.Frame()
+	for _, text := range []string{"Activity Monitor and more", "Kitty", "5 entries"} {
+		r, ok := tt.Find(text)
+		fits := ok && r.X+r.W <= size[0] && r.Y+r.H <= size[1]
+		if !fits {
+			t.Errorf("%q at %+v does not fit %v", text, r, *size)
+		}
+	}
+}

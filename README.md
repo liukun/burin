@@ -14,7 +14,7 @@ Each file in `~/.config/burin/leaders/` is one leader, named after its trigger k
 `cmd_l cmd_r opt_l opt_r ctrl_l ctrl_r shift_l shift_r fn f1`…`f20` and the keypad
 operators `kp_minus kp_plus kp_multiply kp_divide kp_enter kp_clear`, and `tab` (e.g.
 `cmd_r.md`). The format is the snippet format with `## <key> <title>` headings; text before
-the first heading is a comment, except a `hold:` line:
+the first heading is a comment, except `hold:` and `layout:` lines:
 
 ```markdown
 ## k Kitty
@@ -47,6 +47,25 @@ a modifier's file is an error, as modifiers keep their function anyway.
 hold: 200ms
 ## k Kitty
 {shell(open -a kitty)|null}
+```
+
+A `layout:` line before the first heading sets how the HUD arranges the entries. `layout: list`,
+the default, lists them top to bottom in columns of up to 12. `layout: rows` puts them left to
+right in rows, in file order; an entry whose content starts with a `row: break` line starts a
+new row (the line is not part of the content, and a `row:` line further down is). A row does
+not wrap, so the HUD is as wide as the widest row. Any other `layout:` value, a second
+`layout:` line, a `row:` value other than `break`, or `row:` without `layout: rows` is an
+error shown in the HUD.
+
+```markdown
+layout: rows
+## 1 Chrome
+{shell(open -a "Google Chrome")|null}
+## 2 Yab
+{shell(open -a "Yab")|null}
+## q Moshi
+row: break
+{shell(open -a "Moshi")|null}
 ```
 
 Files that name no trigger key are skipped with a notification; a file that fails to

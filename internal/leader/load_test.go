@@ -126,9 +126,9 @@ func TestParseHold(t *testing.T) {
 		{"duplicate", "hold: 1s\nhold: 2s\n## k Kitty\na\n", DefaultHoldDelay, true},
 	}
 	for _, tt := range tests {
-		entries, hold, err := Parse(tt.data)
-		if hold != tt.want || (err != nil) != tt.wantErr {
-			t.Errorf("%s: hold %v err %v, want %v err %v", tt.name, hold, err, tt.want, tt.wantErr)
+		entries, pre, err := Parse(tt.data)
+		if pre.HoldDelay != tt.want || (err != nil) != tt.wantErr {
+			t.Errorf("%s: hold %v err %v, want %v err %v", tt.name, pre.HoldDelay, err, tt.want, tt.wantErr)
 		}
 		hasEntry := len(entries) == 1 && entries[0].Key == "k"
 		if !hasEntry && tt.name != "after heading" {
@@ -175,5 +175,90 @@ func TestLoadHold(t *testing.T) {
 	c = Load(dir).Configs[0]
 	if c.Err == nil || !strings.HasPrefix(c.Err.Error(), "tab.md: ") || errors.Unwrap(c.Err) == nil {
 		t.Errorf("duplicate = %+v", c)
+	}
+}
+
+func TestParseLayout(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		want    Layout
+		wantErr bool
+	}{
+		{"missing", "## k Kitty\na\n", LayoutList, false},
+		{"list", "layout: list\n## k Kitty\na\n", LayoutList, false},
+		{"rows", "  layout:rows \n## k Kitty\na\n", LayoutRows, false},
+		{"with hold", "hold: 1s\nlayout: rows\n## k Kitty\na\n", LayoutRows, false},
+		{"after heading", "## k Kitty\nlayout: rows\n", LayoutList, false},
+		{"invalid", "layout: grid\n## k Kitty\na\n", LayoutList, true},
+		{"duplicate", "layout: rows\nlayout: rows\n## k Kitty\na\n", LayoutList, true},
+	}
+	for _, tt := range tests {
+		entries, pre, err := Parse(tt.data)
+		if pre.Layout != tt.want || (err != nil) != tt.wantErr {
+			t.Errorf("%s: layout %v err %v, want %v err %v", tt.name, pre.Layout, err, tt.want, tt.wantErr)
+		}
+		if len(entries) != 1 || entries[0].Key != "k" {
+			t.Errorf("%s: entries %+v", tt.name, entries)
+		}
+	}
+}
+
+func TestParseRowBreak(t *testing.T) {
+	data := "layout: rows\n" +
+		"## 1 Chrome\nrow: break\na\n" +
+		"## 2 Yab\nb\nrow: break\n" +
+		"## q Moshi\n\n  row:break  \n\nc\nd\n" +
+		"## w Only\nrow: break\n"
+	entries, pre, err := Parse(data)
+	if err != nil || pre.Layout != LayoutRows {
+		t.Fatalf("layout %v err %v", pre.Layout, err)
+	}
+	want := []struct {
+		content  string
+		rowBreak bool
+	}{
+		{"a", true},
+		{"b\nrow: break", false},
+		{"c\nd", true},
+		{"", true},
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("got %d entries: %+v", len(entries), entries)
+	}
+	for i, w := range want {
+		e := entries[i]
+		if e.Content != w.content || e.RowBreak != w.rowBreak {
+			t.Errorf("entry %s = %q break %v, want %q break %v", e.Key, e.Content, e.RowBreak, w.content, w.rowBreak)
+		}
+	}
+}
+
+func TestParseRowErrors(t *testing.T) {
+	tests := map[string]string{
+		"value":      "layout: rows\n## k Kitty\nrow: foo\na\n",
+		"duplicate":  "layout: rows\n## k Kitty\nrow: break\n\nrow: break\na\n",
+		"list":       "## k Kitty\na\n## l Other\nrow: break\nb\n",
+		"list named": "layout: list\n## k Kitty\nrow: break\na\n",
+	}
+	for name, data := range tests {
+		entries, _, err := Parse(data)
+		if err == nil || !strings.Contains(err.Error(), "row:") {
+			t.Errorf("%s: entries %+v err %v", name, entries, err)
+		}
+	}
+	// With an invalid layout:, only that error shows.
+	_, _, err := Parse("layout: row\n## k Kitty\nrow: break\na\n")
+	if err == nil || strings.Contains(err.Error(), "row: needs") {
+		t.Errorf("invalid layout: err %v", err)
+	}
+}
+
+func TestSnapshotLayout(t *testing.T) {
+	l, _ := newLeader(t, map[string]string{"cmd_r": "layout: rows\n## k Kitty\na\n## l Other\nrow: break\nb\n"})
+	l.Handle(EventFlagsChanged, keyRCmd, rCmdDown, false)
+	s := l.Snapshot()
+	if s.Err != nil || s.Layout != LayoutRows || len(s.Entries) != 2 || s.Entries[0].RowBreak || !s.Entries[1].RowBreak {
+		t.Fatalf("snapshot %+v", s)
 	}
 }

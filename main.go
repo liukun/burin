@@ -21,6 +21,7 @@ import (
 	"burin/internal/leader"
 	"burin/internal/pasteboard"
 	"burin/internal/placeholder"
+	"burin/internal/quitter"
 	"burin/internal/snippet"
 	"burin/internal/windowrules"
 )
@@ -36,22 +37,27 @@ const (
 	maxCopiedPreview   = 40
 )
 
-// burin holds the running app's snippet, leader and window rule state.
+// burin holds the running app's snippet, leader, window rule and quitter
+// state.
 type burin struct {
 	snippetsDir string
 	leadersDir  string
-	// windowRulesFile sits directly in the config dir, outside snippets/
-	// and leaders/, so neither of their loaders reads it.
+	// windowRulesFile and quitterFile sit directly in the config dir,
+	// outside snippets/ and leaders/, so neither of their loaders reads
+	// them.
 	windowRulesFile string
+	quitterFile     string
 	eval            *placeholder.Evaluator
 	ex              *expander.Expander
 	leader          *leader.Leader
 	// hud is set once the tray exists; the tap may fire before.
-	hud          atomic.Pointer[hud.HUD]
-	status       *mygo.MenuItem
-	leaderStatus *mygo.MenuItem
-	rulesStatus  *mygo.MenuItem
-	rules        windowrules.Engine
+	hud           atomic.Pointer[hud.HUD]
+	status        *mygo.MenuItem
+	leaderStatus  *mygo.MenuItem
+	rulesStatus   *mygo.MenuItem
+	rules         windowrules.Engine
+	quitterStatus *mygo.MenuItem
+	quitter       quitter.Engine
 
 	reloadMu sync.Mutex
 }
@@ -114,6 +120,12 @@ func statusText(tbl snippet.Table) string {
 // that did not.
 func windowRulesStatusText(set windowrules.Set) string {
 	return fmt.Sprintf("%d window rules, %d errors", set.Config.Len(), len(set.Errors))
+}
+
+// quitterStatusText counts the rules that loaded and the sections that
+// did not.
+func quitterStatusText(set quitter.Set) string {
+	return fmt.Sprintf("%d quitter rules, %d errors", set.Config.Len(), len(set.Errors))
 }
 
 // leaderStatusText counts the files that name no trigger key and the
@@ -307,11 +319,12 @@ func notify(title, body string) {
 }
 
 // reload rescans the snippets and leaders directories and rereads the
-// window rules.
+// window rules and quitter rules.
 func (b *burin) reload() {
 	b.reloadSnippets()
 	b.reloadLeaders()
 	b.reloadWindowRules()
+	b.reloadQuitter()
 }
 
 // reloadSnippets rescans the snippets directory and swaps the keyword
@@ -362,6 +375,21 @@ func (b *burin) reloadWindowRules() {
 	b.rulesStatus.SetLabel(status)
 }
 
+// reloadQuitter rereads the quitter rules file and hands its rules to the
+// engine. A missing file has no rules.
+func (b *burin) reloadQuitter() {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+	set := quitter.Load(b.quitterFile)
+	b.quitter.SetConfig(set.Config)
+	for _, err := range set.Errors {
+		log.Printf("quitter: %v", err)
+	}
+	status := quitterStatusText(set)
+	log.Printf("loaded %s from %s", status, b.quitterFile)
+	b.quitterStatus.SetLabel(status)
+}
+
 // newLeaderEvaluator is the evaluator of leader entries: the snippet
 // built-ins plus reload, which snippets do not get.
 func (b *burin) newLeaderEvaluator(scriptsDir string, path func() string) *placeholder.Evaluator {
@@ -393,12 +421,14 @@ func main() {
 		snippetsDir:     filepath.Join(dir, "snippets"),
 		leadersDir:      filepath.Join(dir, "leaders"),
 		windowRulesFile: filepath.Join(dir, windowrules.FileName),
+		quitterFile:     filepath.Join(dir, quitter.FileName),
 		eval:            newEvaluator(scriptsDir, loginPath),
 		ex:              expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
 	}
 	b.status = folderItem("Loading snippets", b.snippetsDir)
 	b.leaderStatus = folderItem("Loading leaders", b.leadersDir)
 	b.rulesStatus = folderItem("Loading window rules", dir)
+	b.quitterStatus = folderItem("Loading quitter rules", dir)
 	leaderEval := b.newLeaderEvaluator(scriptsDir, loginPath)
 	b.leader = b.newLeader(leaderAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed))
 	for _, d := range []string{b.snippetsDir, b.leadersDir} {
@@ -414,9 +444,13 @@ func main() {
 		snippetsWatcher := watch(b.snippetsDir, b.reloadSnippets)
 		leadersWatcher := watch(b.leadersDir, b.reloadLeaders)
 		// The watch is recursive and reports no file names, so any change
-		// under the config dir rereads the rules file, which is cheap.
-		rulesWatcher := watch(dir, b.reloadWindowRules)
+		// under the config dir rereads the rules files, which is cheap.
+		rulesWatcher := watch(dir, func() {
+			b.reloadWindowRules()
+			b.reloadQuitter()
+		})
 		b.rules.Start(windowrules.DefaultInterval)
+		b.quitter.Start(quitter.DefaultInterval)
 
 		// Only check here: the Grant item below prompts on request.
 		// Accessibility covers Input Monitoring, which an active tap
@@ -429,6 +463,7 @@ func main() {
 		mygo.App.OnQuit(func() {
 			b.ex.Stop()
 			b.rules.Stop()
+			b.quitter.Stop()
 			if tap != nil {
 				tap.Stop()
 			}
@@ -439,7 +474,7 @@ func main() {
 			}
 		})
 
-		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.rulesStatus}
+		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.rulesStatus, b.quitterStatus}
 		if !trusted {
 			items = append(items, &mygo.MenuItem{Label: grantAccessibility, Click: func(*mygo.MenuItem, *mygo.Window) {
 				// Granted meanwhile: the tap needs a fresh process to see it.

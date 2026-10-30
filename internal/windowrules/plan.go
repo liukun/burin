@@ -107,7 +107,8 @@ type planner struct {
 // CoreGraphics window list (layer 0, on screen), displays the connected
 // displays and prev the cache Plan returned last round. Pin rules run
 // first, in order, and mark every window they apply to as handled whether
-// or not it moves; margin rules then skip handled windows.
+// or not it moves; margin rules then skip handled windows. Only the pins
+// ActivePins keeps for the displays run.
 //
 // Plan only calls insp for windows of apps whose snapshot changed or
 // whose last answer failed more than retryFailedAfter rounds ago, and,
@@ -125,7 +126,7 @@ func Plan(cfg Config, windows []CGWindow, displays []Display, prev Cache, insp I
 	for _, w := range windows {
 		p.frames[w.ID] = w.Bounds
 	}
-	for _, rule := range cfg.Pins {
+	for _, rule := range ActivePins(cfg.Pins, displays) {
 		p.pin(rule, windows)
 	}
 	for _, rule := range cfg.Margins {

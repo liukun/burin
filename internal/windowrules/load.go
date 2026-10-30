@@ -70,9 +70,11 @@ func Load(path string) Set {
 // Parse reads the rules of a window_rules.md file. Each "## " heading
 // starts a section of "key: value" lines; every other line, and the text
 // before the first heading, is a comment. A section with a margin: line
-// is a MarginRule, any other a Rule for the app its heading names. A
-// section that fails to parse is skipped and reported, the others still
-// load.
+// is a MarginRule, any other a Rule for the app its heading names. An app
+// may have several sections; ActivePins picks the one that runs, so a
+// section without screen_w: and screen_h: after one with them is the
+// fallback when that display is unplugged. A section that fails to parse
+// is skipped and reported, the others still load.
 func Parse(data string) Set {
 	var s Set
 	sections, err := snippet.Parse(data)

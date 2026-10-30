@@ -306,6 +306,35 @@ func TestPlanRuleWithoutScreen(t *testing.T) {
 	}
 }
 
+// A pin rule for the BenQ and a fallback without a display: only one
+// runs, so the window moves once, to the BenQ when it is connected and
+// into place on the laptop otherwise.
+func TestPlanFallbackPinMovesOnce(t *testing.T) {
+	base := Rule{App: "kitty", Width: Range{0.5, 0.9}, Height: Range{0.3, 0.9}}
+	docked, fallback := base, base
+	docked.Screen, docked.Anchor = &benqSize, TopLeft
+	fallback.Anchor = BottomLeft
+	cfg := Config{Pins: []Rule{docked, fallback}}
+	tests := []struct {
+		name     string
+		displays []Display
+		from     Rect
+		want     Rect
+	}{
+		{"docked", desk, Rect{2100, 300, 1000, 600}, Rect{0, 30, 1000, 600}},
+		{"laptop alone", []Display{laptop}, Rect{100, 100, 1000, 600}, Rect{0, 982 - 600, 1000, 600}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := at(kitty, tt.from)
+			moves, _, _ := Plan(cfg, []CGWindow{w}, tt.displays, nil, &fakeInspector{infos: testInfos})
+			if len(moves) != 1 || moves[0].To != tt.want {
+				t.Fatalf("moves = %+v, want one to %+v", moves, tt.want)
+			}
+		})
+	}
+}
+
 // Two margin rules on displays of the same size: the second sees where
 // the first put the window.
 func TestPlanLaterRulesSeeMovedFrames(t *testing.T) {

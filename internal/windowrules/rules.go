@@ -90,7 +90,8 @@ type MarginRule struct {
 }
 
 // Config is the rules of window_rules.md. Pins run before Margins, so the
-// margin rules know which windows are pinned.
+// margin rules know which windows are pinned. Of several Pins for one
+// app, ActivePins picks the one that runs.
 type Config struct {
 	Pins    []Rule
 	Margins []MarginRule
@@ -236,6 +237,24 @@ func WindowsOfApp(app string, wins []CGWindow) []CGWindow {
 		if w.Owner == app {
 			out = append(out, w)
 		}
+	}
+	return out
+}
+
+// ActivePins returns the pin rules that run with the connected displays:
+// of several rules for one app, the first whose Screen is nil or
+// connected, so a rule without a Screen listed after one with it is the
+// fallback when that display is unplugged. The rest keep their order.
+func ActivePins(pins []Rule, displays []Display) []Rule {
+	var out []Rule
+	chosen := map[string]bool{}
+	for _, rule := range pins {
+		connected := rule.Screen == nil || FindScreenBySize(*rule.Screen, displays) != nil
+		if chosen[rule.App] || !connected {
+			continue
+		}
+		chosen[rule.App] = true
+		out = append(out, rule)
 	}
 	return out
 }

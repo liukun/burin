@@ -214,3 +214,29 @@ func TestFindScreenBySizeAndScreenOf(t *testing.T) {
 		t.Fatalf("ScreenOf off screen = %+v, want nil", got)
 	}
 }
+
+func TestActivePins(t *testing.T) {
+	kitty := Rule{App: "kitty"}
+	onBenq := Rule{App: "Slack", Screen: &benqSize}
+	onPortrait := Rule{App: "Slack", Screen: &portraitSize}
+	anywhere := Rule{App: "Slack"}
+	pins := []Rule{onBenq, onPortrait, kitty, anywhere}
+	tests := []struct {
+		name     string
+		displays []Display
+		want     []Rule
+	}{
+		{"desk", desk, []Rule{onBenq, kitty}},
+		{"portrait only", []Display{portrait}, []Rule{onPortrait, kitty}},
+		{"laptop alone", []Display{laptop}, []Rule{kitty, anywhere}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ActivePins(pins, tt.displays); !slices.EqualFunc(got, tt.want, sameRule) {
+				t.Fatalf("ActivePins = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func sameRule(a, b Rule) bool { return a.App == b.App && a.Screen == b.Screen }

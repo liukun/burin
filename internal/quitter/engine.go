@@ -132,8 +132,12 @@ func (e *Engine) round(state State, self int32) State {
 	steps, next := Plan(cfg, withoutPID(apps, self), state, time.Now())
 	for _, s := range steps {
 		log.Printf("quitter: %s", s)
+		// hide and terminate are asynchronous: NO means the app did not
+		// take the request at once, not that it refused. A busy app
+		// often hides a moment later; the next round sees it hidden
+		// or gone and leaves it alone, or asks again.
 		if !apply(s) {
-			log.Printf("quitter: %s %s (pid %d) failed", s.Rule.Action, s.App.Name, s.App.PID)
+			log.Printf("quitter: %s %s (pid %d) returned NO, checking next round", s.Rule.Action, s.App.Name, s.App.PID)
 		}
 	}
 	return next

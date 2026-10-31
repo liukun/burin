@@ -115,7 +115,8 @@ func frontmostPID() (pid int32, ok bool) {
 }
 
 // apply hides or quits the app of step. It reports false when the app is
-// gone or refused.
+// gone or did not take the request at once; the request may still land,
+// as hide and terminate are asynchronous.
 func apply(step Step) bool {
 	method := "hide"
 	if step.Rule.Action == Quit {

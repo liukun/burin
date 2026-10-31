@@ -1,4 +1,4 @@
-// Package quitter hides or quits apps that have not been the frontmost
+// Package quitter hides, quits or closes the windows of apps that have not been the frontmost
 // app for a while, after Quitter for Mac. Each rule names an app, a
 // period and an action; the engine notes when every running app was last
 // frontmost and acts on those whose period has passed. Background
@@ -26,13 +26,22 @@ const (
 	// Quit asks the app to terminate, as Cmd-Q does: an app with unsaved
 	// documents asks about them first. It is never force-quit.
 	Quit
+	// CloseWindow closes the app's standard windows, minimized ones
+	// included, by pressing their close buttons; floating windows, panels
+	// and dialogs stay. The app keeps running and is not hidden. A window
+	// with unsaved changes may ask about them first.
+	CloseWindow
 )
 
 func (a Action) String() string {
-	if a == Quit {
+	switch a {
+	case Quit:
 		return "quit"
+	case CloseWindow:
+		return "close_window"
+	default:
+		return "hide"
 	}
-	return "hide"
 }
 
 // Match is the property of a running app a rule compares its Value with.
@@ -48,7 +57,7 @@ const (
 	ByPath
 )
 
-// Rule hides or quits one app after it has not been frontmost for After.
+// Rule hides, quits or closes the windows of one app after it has not been frontmost for After.
 type Rule struct {
 	// Name is the section heading, for the log. With ByName it is also
 	// what the app's name must equal.

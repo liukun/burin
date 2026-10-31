@@ -36,7 +36,7 @@ const (
 
 var knownKeys = map[string]bool{keyAfter: true, keyAction: true, keyBundle: true, keyPath: true}
 
-var actions = map[string]Action{"hide": Hide, "quit": Quit}
+var actions = map[string]Action{"hide": Hide, "quit": Quit, "close_window": CloseWindow}
 
 // Load reads the rules file at path. A missing file has no rules.
 func Load(path string) Set {
@@ -118,7 +118,7 @@ func parseRule(sec snippet.Snippet) (Rule, error) {
 		return rule, nil
 	}
 	if rule.Action, ok = actions[action]; !ok {
-		return Rule{}, fmt.Errorf("action: %q is not quit or hide", action)
+		return Rule{}, fmt.Errorf("action: %q is not hide, quit or close_window", action)
 	}
 	return rule, nil
 }

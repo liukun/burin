@@ -30,6 +30,7 @@ var (
 	axUIElementSetMessagingTimeout func(el uintptr, timeout float32) int32
 	axUIElementCopyAttributeValue  func(el, attr uintptr, value *uintptr) int32
 	axUIElementSetAttributeValue   func(el, attr, value uintptr) int32
+	axUIElementPerformAction       func(el, action uintptr) int32
 	axValueCreate                  func(valueType uint32, value unsafe.Pointer) uintptr
 	axValueGetValue                func(value uintptr, valueType uint32, out unsafe.Pointer) bool
 	// axUIElementGetWindow is the private _AXUIElementGetWindow, which
@@ -41,6 +42,7 @@ var (
 	// macros, not exported symbols.
 	attrWindows, attrSubrole, attrMinimized, attrFullScreen uintptr
 	attrFullScreenButton, attrTitle, attrPosition, attrSize uintptr
+	attrCloseButton, actionPress                            uintptr
 )
 
 // loadAX registers the Accessibility functions from ApplicationServices.
@@ -49,6 +51,7 @@ func loadAX(as uintptr) {
 	purego.RegisterLibFunc(&axUIElementSetMessagingTimeout, as, "AXUIElementSetMessagingTimeout")
 	purego.RegisterLibFunc(&axUIElementCopyAttributeValue, as, "AXUIElementCopyAttributeValue")
 	purego.RegisterLibFunc(&axUIElementSetAttributeValue, as, "AXUIElementSetAttributeValue")
+	purego.RegisterLibFunc(&axUIElementPerformAction, as, "AXUIElementPerformAction")
 	purego.RegisterLibFunc(&axValueCreate, as, "AXValueCreate")
 	purego.RegisterLibFunc(&axValueGetValue, as, "AXValueGetValue")
 	if p, err := purego.Dlsym(as, "_AXUIElementGetWindow"); err == nil {
@@ -62,6 +65,8 @@ func loadAX(as uintptr) {
 	attrTitle = cfStringCreate("AXTitle")
 	attrPosition = cfStringCreate("AXPosition")
 	attrSize = cfStringCreate("AXSize")
+	attrCloseButton = cfStringCreate("AXCloseButton")
+	actionPress = cfStringCreate("AXPress")
 }
 
 // axSession asks Accessibility about windows during one round. It looks
@@ -171,6 +176,51 @@ func (s *axSession) AppWindows(pid int32) ([]Info, error) {
 		infos = append(infos, elementInfo(a.window(i)))
 	}
 	return infos, nil
+}
+
+// CloseStandardWindows closes every standard window of the app of pid,
+// minimized ones included, by pressing its close button, as a click on
+// the red button does; floating windows, panels and dialogs are left
+// alone. It returns how many windows it pressed the button of. A window
+// that fails stops nothing: the others are still closed, and the first
+// failure is returned. It runs on the calling goroutine, like the rest
+// of the package's Accessibility calls.
+func CloseStandardWindows(pid int32) (closed int, err error) {
+	session := newAXSession()
+	defer session.close()
+	a := session.app(pid)
+	if a.err != nil {
+		return 0, a.err
+	}
+	n := cfArrayGetCount(a.windows)
+	for i := range n {
+		el := a.window(i)
+		if stringAttr(el, attrSubrole) != standardWindow {
+			continue
+		}
+		if pressErr := pressClose(el); pressErr != nil {
+			if err == nil {
+				err = fmt.Errorf("pid %d window %d of %d: %w", pid, i+1, n, pressErr)
+			}
+			continue
+		}
+		closed++
+	}
+	return closed, err
+}
+
+// pressClose presses the close button of a window element.
+func pressClose(el uintptr) error {
+	var button uintptr
+	if code := axUIElementCopyAttributeValue(el, attrCloseButton, &button); code != axErrorSuccess {
+		return fmt.Errorf("AXCloseButton: AXError %d", code)
+	}
+	defer cfRelease(button)
+	axUIElementSetMessagingTimeout(button, axTimeout)
+	if code := axUIElementPerformAction(button, actionPress); code != axErrorSuccess {
+		return fmt.Errorf("AXPress: AXError %d", code)
+	}
+	return nil
 }
 
 // window returns the i-th element of the app's AXWindows, with the

@@ -45,6 +45,20 @@ func TestParseExample(t *testing.T) {
 	}
 }
 
+func TestParseCloseWindow(t *testing.T) {
+	set := Parse("## Hammerspoon\nbundle: org.hammerspoon.Hammerspoon\nafter: 10m\naction: close_window\n")
+	if len(set.Errors) != 0 {
+		t.Fatalf("Errors = %+v, want none", set.Errors)
+	}
+	want := []Rule{{Name: "Hammerspoon", Match: ByBundle, Value: "org.hammerspoon.Hammerspoon", After: 10 * time.Minute, Action: CloseWindow}}
+	if got := set.Config.Rules; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Rules = %+v, want %+v", got, want)
+	}
+	if got := want[0].String(); got != "close_window after 10m0s" {
+		t.Fatalf("String = %q, want close_window after 10m0s", got)
+	}
+}
+
 func TestParseSectionErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -54,7 +68,7 @@ func TestParseSectionErrors(t *testing.T) {
 		{"缺 after", "action: quit\n", "after: is required"},
 		{"after 不是时长", "after: 30\n", `"30" is not a duration`},
 		{"after 为零", "after: 0s\n", `"0s" is not positive`},
-		{"action 拼错", "after: 1m\naction: close\n", `"close" is not quit or hide`},
+		{"action 拼错", "after: 1m\naction: close\n", `"close" is not hide, quit or close_window`},
 		{"未知 key", "after: 1m\nbundel: com.foo\n", `unknown key "bundel"`},
 		{"重复 key", "after: 1m\nafter: 2m\n", "duplicate after:"},
 		{"bundle 和 path 同时", "after: 1m\nbundle: com.foo\npath: /Applications/Foo.app\n", "bundle: and path: exclude each other"},

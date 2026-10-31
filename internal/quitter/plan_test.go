@@ -116,6 +116,33 @@ func TestPlanQuitsHiddenApp(t *testing.T) {
 	}
 }
 
+func TestPlanCloseWindowEveryRound(t *testing.T) {
+	hsRule := Rule{Name: "Hammerspoon", Match: ByBundle, Value: "org.hammerspoon.Hammerspoon", After: 10 * time.Minute, Action: CloseWindow}
+	hs := App{PID: 60, Name: "Hammerspoon", BundleID: "org.hammerspoon.Hammerspoon"}
+	c := Config{Rules: []Rule{hsRule}}
+	// A hidden app still has windows to close: it is not skipped.
+	now := t0.Add(11 * time.Minute)
+	steps, next := Plan(c, []App{hidden(hs)}, State{60: t0}, now)
+	want := []Step{{App: hidden(hs), Rule: hsRule, Idle: 11 * time.Minute}}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("steps = %+v, want %+v", steps, want)
+	}
+	if !next[60].Equal(t0) {
+		t.Fatalf("next[60] = %v, want unchanged %v after close_window", next[60], t0)
+	}
+	// The app keeps running, so the next round closes again, still
+	// counting from t0.
+	later := now.Add(30 * time.Second)
+	steps, next = Plan(c, []App{hs}, next, later)
+	want = []Step{{App: hs, Rule: hsRule, Idle: 11*time.Minute + 30*time.Second}}
+	if !reflect.DeepEqual(steps, want) {
+		t.Fatalf("next round steps = %+v, want %+v", steps, want)
+	}
+	if !next[60].Equal(t0) {
+		t.Fatalf("next[60] = %v, want unchanged %v", next[60], t0)
+	}
+}
+
 func TestPlanUnmatchedAndGoneApps(t *testing.T) {
 	prev := State{40: t0, 99: t0}
 	steps, next := Plan(cfg, []App{kitty}, prev, t0.Add(24*time.Hour))

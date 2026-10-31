@@ -33,7 +33,10 @@ func (s Step) String() string {
 //   - an app not frontmost for longer than its rule's period is hidden,
 //     unless it already is, or quit. A quit app counts as active now, so
 //     one that stays open, e.g. asking about unsaved changes, is asked
-//     again only after another full period.
+//     again only after another full period;
+//   - an app whose rule is close_window has its standard windows closed
+//     every round until none are left, hidden or not. Closing them does
+//     not reset its timer: the app was not used, only tidied.
 func Plan(cfg Config, apps []App, prev State, now time.Time) ([]Step, State) {
 	next := make(State, len(apps))
 	var steps []Step

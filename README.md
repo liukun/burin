@@ -81,12 +81,13 @@ The directory is watched, and the tray's Reload reloads it too.
 
 ## Quitter
 
-After [Quitter for Mac](https://marco.org/apps): hide or quit an app once it has not been
-the frontmost app for a while. Switching to an app resets its timer; background activity
-(sound, network, notifications) does not. Rules live in `~/.config/burin/quitter.md`, one
-`## ` section per app of `key: value` lines; other lines, and the text before the first
-heading, are comments. Any `word:` line inside a section is parsed as a key, so a comment
-must not take that form (an unknown key makes the section an error):
+After [Quitter for Mac](https://marco.org/apps): hide or quit an app, or close its
+windows, once it has not been the frontmost app for a while. Switching to an app resets its
+timer; background activity (sound, network, notifications) does not. Rules live in
+`~/.config/burin/quitter.md`, one `## ` section per app of `key: value` lines; other lines,
+and the text before the first heading, are comments. Any `word:` line inside a section is
+parsed as a key, so a comment must not take that form (an unknown key makes the section an
+error):
 
 ```markdown
 ## Slack
@@ -105,9 +106,14 @@ after: 2h
 
 - `after:` (required) is how long the app may stay in the background, a Go duration
   (`90s`, `30m`, `1h`).
-- `action:` is `hide` (the default) or `quit`. A hidden app is not hidden again. Quit is the
-  normal Cmd-Q, never a force quit: an app with unsaved documents asks about them, and is
-  asked again only after another full period.
+- `action:` is `hide` (the default), `quit` or `close_window`. A hidden app is not hidden
+  again. Quit is the normal Cmd-Q, never a force quit: an app with unsaved documents asks
+  about them, and is asked again only after another full period. `close_window` closes the
+  app's standard windows (minimized ones too) with their close buttons and leaves floating
+  windows, panels and dialogs open, e.g. the Hammerspoon Console but not its alerts; the app
+  keeps running and is not hidden. It closes whatever standard windows are open every
+  30-second check until the app is frontmost again, and needs Accessibility permission. A
+  window with unsaved changes may ask about them.
 - The heading is matched exactly against the app's name as the Dock shows it. With a
   `bundle:` line (the bundle identifier) or a `path:` line (the full path of the `.app`,
   exact, `~` for the home directory) the heading is only a label. A section may have one of

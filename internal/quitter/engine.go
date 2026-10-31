@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"burin/internal/windowrules"
 	"burin/internal/workspace"
 )
 
@@ -29,8 +30,9 @@ const (
 
 // Engine applies a Config on its own goroutine, every interval, and
 // samples the frontmost app every DefaultActiveInterval in between. It
-// asks the main thread for the running apps and to hide or quit them, and
-// runs no run loop of its own.
+// asks the main thread for the running apps and to hide or quit them,
+// closes windows through Accessibility on its own goroutine, as
+// windowrules does, and runs no run loop of its own.
 type Engine struct {
 	mu   sync.Mutex
 	cfg  Config
@@ -119,8 +121,8 @@ func (e *Engine) sampleFrontmost(state State, self int32) State {
 	return MarkActive(state, pid, time.Now())
 }
 
-// round looks at the running apps once and hides or quits those whose
-// rule says so. It returns the state for the next round.
+// round looks at the running apps once and hides, quits or closes the
+// windows of those whose rule says so. It returns the state for the next round.
 func (e *Engine) round(state State, self int32) State {
 	cfg := e.config()
 	// Without rules there is nothing to time, and nothing to list.
@@ -133,6 +135,10 @@ func (e *Engine) round(state State, self int32) State {
 	}
 	steps, next := Plan(cfg, withoutPID(apps, self), state, time.Now())
 	for _, s := range steps {
+		if s.Rule.Action == CloseWindow {
+			closeWindows(s)
+			continue
+		}
 		log.Printf("quitter: %s", s)
 		// hide and terminate are asynchronous: NO means the app did not
 		// take the request at once, not that it refused. A busy app
@@ -153,4 +159,20 @@ func apply(step Step) bool {
 		return workspace.Terminate(step.App.PID)
 	}
 	return workspace.Hide(step.App.PID)
+}
+
+// closeWindows closes the standard windows of the app of step. Plan
+// emits the step every round once the period is over, so an app with no
+// standard window left is the usual case and is skipped without a log
+// line; only a round that closed something, or failed to, is logged.
+func closeWindows(step Step) {
+	closed, err := windowrules.CloseStandardWindows(step.App.PID)
+	if err != nil {
+		log.Printf("quitter: close_window %s: %v", step.App.Name, err)
+		return
+	}
+	if closed == 0 {
+		return
+	}
+	log.Printf("quitter: %s, %d closed", step, closed)
 }

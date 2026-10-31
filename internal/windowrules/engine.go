@@ -36,6 +36,15 @@ type Engine struct {
 	cfg  Config
 	stop chan struct{}
 	done chan struct{}
+	hold hold
+}
+
+// DisplaysChanged tells the engine the displays changed, so rounds hold
+// for SettleDelay while macOS lays the windows out again. It is safe to
+// call from any goroutine, before Start and after Stop.
+func (e *Engine) DisplaysChanged() {
+	e.hold.extend(time.Now(), SettleDelay)
+	log.Printf("windowrules: displays changed, holding rounds for %v", SettleDelay)
 }
 
 // SetConfig replaces the rules from the next round on. The cache of
@@ -108,6 +117,11 @@ func (e *Engine) round(cache Cache, idle *int) Cache {
 		return nil
 	}
 	start := time.Now()
+	// The windows are in flux after a display change; the cache is kept,
+	// bounds that changed drop their entries on the next round anyway.
+	if e.hold.holding(start) {
+		return cache
+	}
 	windows, err := listWindows()
 	if err != nil {
 		log.Printf("windowrules: %v", err)

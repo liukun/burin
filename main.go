@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -60,6 +61,42 @@ type burin struct {
 	quitter       quitter.Engine
 
 	reloadMu sync.Mutex
+}
+
+// logFile is where the log is kept besides stderr, which a login item
+// has nowhere to send: ~/Library/Logs/burin.log. A file past
+// maxLogSize at startup is moved aside to burin.log.old first, so the
+// two never hold more than twice that.
+const (
+	logFileName = "burin.log"
+	maxLogSize  = 5 << 20
+)
+
+// openLog adds a log file under ~/Library/Logs to the log output. A
+// failure is logged and leaves stderr alone.
+func openLog() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	dir := filepath.Join(home, "Library", "Logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Print(err)
+		return
+	}
+	path := filepath.Join(dir, logFileName)
+	if info, err := os.Stat(path); err == nil && info.Size() > maxLogSize {
+		if err := os.Rename(path, path+".old"); err != nil {
+			log.Print(err)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
 }
 
 func configDir() string {
@@ -414,6 +451,7 @@ func watch(dir string, onChange func()) *snippet.Watcher {
 }
 
 func main() {
+	openLog()
 	dir := configDir()
 	scriptsDir := filepath.Join(dir, "scripts")
 	loginPath := placeholder.StartLoginPath()
@@ -449,6 +487,10 @@ func main() {
 			b.reloadWindowRules()
 			b.reloadQuitter()
 		})
+		// A display that drops and returns moves every window twice;
+		// rounds hold meanwhile so the rules do not clamp the windows to
+		// the display they pass through.
+		mygo.Screen.OnDisplaysChanged(b.rules.DisplaysChanged)
 		b.rules.Start(windowrules.DefaultInterval)
 		b.quitter.Start(quitter.DefaultInterval)
 

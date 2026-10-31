@@ -25,6 +25,7 @@ import (
 	"burin/internal/quitter"
 	"burin/internal/snippet"
 	"burin/internal/windowrules"
+	"burin/internal/workspace"
 )
 
 // trayIcon is drawn by scripts/tray-icon.swift.
@@ -428,7 +429,7 @@ func (b *burin) reloadQuitter() {
 }
 
 // newLeaderEvaluator is the evaluator of leader entries: the snippet
-// built-ins plus reload, which snippets do not get.
+// built-ins plus reload, open and toggle, which snippets do not get.
 func (b *burin) newLeaderEvaluator(scriptsDir string, path func() string) *placeholder.Evaluator {
 	ev := newEvaluator(scriptsDir, path)
 	ev.Builtins["reload"] = func(args []string, _ string) (string, error) {
@@ -438,7 +439,26 @@ func (b *burin) newLeaderEvaluator(scriptsDir string, path func() string) *place
 		b.reload()
 		return "", nil
 	}
+	// open and toggle switch apps in process rather than forking
+	// open -a, and return nothing so an entry needs no |null.
+	ev.Builtins["open"] = appBuiltin(workspace.Open)
+	ev.Builtins["toggle"] = appBuiltin(workspace.Toggle)
 	return ev
+}
+
+// appBuiltin makes a builtin of fn, which takes the app name as its one
+// argument.
+func appBuiltin(fn func(name string) error) placeholder.Func {
+	return func(args []string, _ string) (string, error) {
+		if len(args) != 1 {
+			return "", fmt.Errorf("takes one argument, the app name, got %d", len(args))
+		}
+		// An empty name would match every process without a bundle ID.
+		if args[0] == "" {
+			return "", errors.New("needs an app name")
+		}
+		return "", fn(args[0])
+	}
 }
 
 func watch(dir string, onChange func()) *snippet.Watcher {

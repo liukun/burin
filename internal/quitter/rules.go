@@ -11,6 +11,8 @@ package quitter
 import (
 	"fmt"
 	"time"
+
+	"burin/internal/workspace"
 )
 
 // Action is what a rule does to an app that has been inactive too long.
@@ -94,14 +96,4 @@ func (c Config) ruleFor(app App) (Rule, bool) {
 }
 
 // App is one running app as NSWorkspace lists it.
-type App struct {
-	PID      int32
-	Name     string
-	BundleID string
-	// Path is the path of the app's bundle, empty for a process without
-	// one.
-	Path string
-	// Active is set for the frontmost app.
-	Active bool
-	Hidden bool
-}
+type App = workspace.App

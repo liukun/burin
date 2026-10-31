@@ -29,9 +29,16 @@ the first heading is a comment, except `hold:` and `layout:` lines:
 
 Entry keys are `a`–`z`, `0`–`9`, the ANSI punctuation keys, `space`, `tab`, `return`
 and `f1`…`f20`, matched by physical (ANSI) position. The content is expanded like a
-snippet's, with an extra `{reload}` that reloads snippets and leaders. A non-empty result
-is copied to the clipboard and announced; an empty one (`|null`) does nothing more.
-The HUD marks a running entry `●`, a finished one `✓` (for a second) and a failed one
+snippet's, with extra built-ins that snippets do not get:
+
+- `{reload}` reloads snippets and leaders.
+- `{open(App)}` brings the app to the front, launching it if it is not running.
+- `{toggle(App)}` hides the app if it is frontmost, brings it to the front if it is running
+  or hidden, and launches it otherwise.
+
+`App` is the app's name as the Dock shows it (`{toggle(Google Chrome)}`) or, for a running
+app, its bundle ID. A non-empty result is copied to the clipboard and announced; an empty
+one (`|null`) does nothing more. The HUD marks a running entry `●`, a finished one `✓` (for a second) and a failed one
 `✗`. A file's own trigger key cannot be one of its entries.
 
 A `hold: <duration>` line before the first heading (`hold: 200ms`, `hold: 0.2s`) puts an

@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"burin/internal/workspace"
 )
 
 const (
@@ -110,7 +112,7 @@ func (e *Engine) sampleFrontmost(state State, self int32) State {
 	if e.config().Len() == 0 {
 		return state
 	}
-	pid, ok := frontmostPID()
+	pid, ok := workspace.FrontmostPID()
 	if !ok || pid == self {
 		return state
 	}
@@ -125,7 +127,7 @@ func (e *Engine) round(state State, self int32) State {
 	if cfg.Len() == 0 {
 		return nil
 	}
-	apps, ok := listApps()
+	apps, ok := workspace.RunningApps()
 	if !ok {
 		return state
 	}
@@ -141,4 +143,14 @@ func (e *Engine) round(state State, self int32) State {
 		}
 	}
 	return next
+}
+
+// apply hides or quits the app of step. It reports false when the app is
+// gone or did not take the request at once; the request may still land,
+// as hide and terminate are asynchronous.
+func apply(step Step) bool {
+	if step.Rule.Action == Quit {
+		return workspace.Terminate(step.App.PID)
+	}
+	return workspace.Hide(step.App.PID)
 }

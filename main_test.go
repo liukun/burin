@@ -180,3 +180,25 @@ func TestReloadOnlyForLeaders(t *testing.T) {
 		t.Fatalf("reload with arguments: %v", errs)
 	}
 }
+
+func TestAppBuiltinsOnlyForLeaders(t *testing.T) {
+	path := func() string { return "" }
+	b := &burin{}
+	leaderEval := b.newLeaderEvaluator(t.TempDir(), path)
+	snippetEval := newEvaluator(t.TempDir(), path)
+	for _, name := range []string{"open", "toggle"} {
+		if _, ok := leaderEval.Builtins[name]; !ok {
+			t.Errorf("leader evaluator lacks %s", name)
+		}
+		if _, ok := snippetEval.Builtins[name]; ok {
+			t.Errorf("snippet evaluator has %s", name)
+		}
+	}
+	// None of these reach the workspace calls: the arguments are checked
+	// first.
+	for _, in := range []string{"{open()}", "{toggle(a,b)}", `{toggle("")}`} {
+		if _, errs := leaderEval.Expand(in); len(errs) != 1 {
+			t.Errorf("%s: %v", in, errs)
+		}
+	}
+}

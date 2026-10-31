@@ -532,6 +532,11 @@ func main() {
 			mygo.Separator(),
 			&mygo.MenuItem{Label: "Reload", Click: func(*mygo.MenuItem, *mygo.Window) { go b.reload() }},
 			openAtLoginItem(),
+		)
+		if stamp := buildStampItem(); stamp != nil {
+			items = append(items, stamp)
+		}
+		items = append(items,
 			mygo.Separator(),
 			&mygo.MenuItem{Role: mygo.RoleQuit},
 		)

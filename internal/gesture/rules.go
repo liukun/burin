@@ -10,7 +10,9 @@ package gesture
 import (
 	"fmt"
 	"slices"
+	"time"
 
+	"burin/internal/leader"
 	"burin/internal/workspace"
 )
 
@@ -40,9 +42,17 @@ const (
 	Right Direction = "right"
 	Up    Direction = "up"
 	Down  Direction = "down"
+
+	UpLeft    Direction = "up-left"
+	UpRight   Direction = "up-right"
+	DownLeft  Direction = "down-left"
+	DownRight Direction = "down-right"
 )
 
-var directions = map[string]Direction{"left": Left, "right": Right, "up": Up, "down": Down}
+var directions = map[string]Direction{
+	"left": Left, "right": Right, "up": Up, "down": Down,
+	"up-left": UpLeft, "up-right": UpRight, "down-left": DownLeft, "down-right": DownRight,
+}
 
 // Button is a mouse button by its CoreGraphics number
 // (kCGMouseEventButtonNumber): 0 is the left button, 1 the right, 2 the
@@ -98,14 +108,38 @@ func (r Rule) matchesApp(app workspace.App) bool {
 	return byName || byBundle
 }
 
+// Preamble is what the lines before the first heading set.
+type Preamble struct {
+	// HoldDelay is how long the button must be held before the compass
+	// shows its gestures, set by a ":hold:" line. Zero shows it as soon
+	// as the button goes down. The gestures themselves do not wait for
+	// it.
+	HoldDelay time.Duration
+}
+
+// DefaultHoldDelay is the hold delay of a file without a :hold: line, or
+// with an invalid one: long enough that a plain click does not flash the
+// compass. It is the leader's default too.
+const DefaultHoldDelay = leader.DefaultHoldDelay
+
 // Config is one mouse file: the button it is named after and its rules in
 // file order. Err is set when the file could not be read or parsed; the
-// button then has no rules and is not listened to.
+// button then has no rules and is not listened to, unless the only error
+// is an invalid :hold: line, which leaves the rules and DefaultHoldDelay.
 type Config struct {
 	Button Button
 	File   string
 	Rules  []Rule
 	Err    error
+	Preamble
+
+	// holdErrOnly is set when Err is only that of the :hold: line.
+	holdErrOnly bool
+}
+
+// Usable reports whether the button of c is listened to.
+func (c Config) Usable() bool {
+	return c.Err == nil || c.holdErrOnly
 }
 
 // Set is the result of scanning a mouse directory.
@@ -116,18 +150,29 @@ type Set struct {
 	Errors []error
 }
 
-// config returns the loaded config of button b, if it has one that
-// parsed.
+// config returns the loaded config of button b, if it has one whose
+// rules parsed.
 func (s *Set) config(b Button) (Config, bool) {
 	if s == nil {
 		return Config{}, false
 	}
 	for _, c := range s.Configs {
-		if c.Button == b && c.Err == nil {
+		if c.Button == b && c.Usable() {
 			return c, true
 		}
 	}
 	return Config{}, false
+}
+
+// HoldDelay returns how long button b must be held before the compass
+// shows its gestures: the hold delay of its config, or DefaultHoldDelay
+// when it has none that loaded.
+func (s *Set) HoldDelay(b Button) time.Duration {
+	c, ok := s.config(b)
+	if !ok {
+		return DefaultHoldDelay
+	}
+	return c.HoldDelay
 }
 
 // Has reports whether button b has a file that loaded, so its presses
@@ -148,7 +193,7 @@ func (s *Set) Mask() uint64 {
 	var mask uint64
 	for _, c := range s.Configs {
 		switch {
-		case c.Err != nil:
+		case !c.Usable():
 		case c.Button == ButtonRight:
 			mask |= rightMask
 		default:

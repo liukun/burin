@@ -2,36 +2,65 @@ package gesture
 
 import "math"
 
-// Thresholds of a gesture: the drag must be at least MinDistance pixels
-// long, and its main axis must make up at least AxisRatio of the
-// horizontal plus vertical distance, so a diagonal is no gesture.
+// Thresholds of a gesture. A drag whose main axis makes up at least
+// AxisRatio of the horizontal plus vertical distance, within about 23
+// degrees of an axis, is left, right, up or down when it is at least
+// MinDistance pixels long. Any other drag is in one of the diagonal
+// sectors between them and is a diagonal gesture when it is at least
+// DiagonalMinDistance pixels long, so that a sloppy short drag is no
+// gesture.
 const (
-	MinDistance = 30
-	AxisRatio   = 0.7
+	MinDistance         = 30
+	DiagonalMinDistance = 60
+	AxisRatio           = 0.7
 )
 
 // Classify returns the direction of a drag by dx, dy, where y grows
 // downwards as in CoreGraphics, and whether the drag is a gesture at all.
 func Classify(dx, dy float64) (Direction, bool) {
 	ax, ay := math.Abs(dx), math.Abs(dy)
-	tooShort := math.Hypot(ax, ay) < MinDistance
-	if tooShort {
+	length := math.Hypot(ax, ay)
+	if length < MinDistance {
 		return "", false
 	}
 	major := max(ax, ay)
-	offAxis := major/(ax+ay) < AxisRatio
-	if offAxis {
+	onAxis := major/(ax+ay) >= AxisRatio
+	if onAxis {
+		return cardinal(dx, dy, ax, ay), true
+	}
+	if length < DiagonalMinDistance {
 		return "", false
 	}
+	return diagonal(dx, dy), true
+}
+
+// cardinal is the axis direction of a drag along its main axis, given
+// its absolute distances ax and ay on each axis.
+func cardinal(dx, dy, ax, ay float64) Direction {
 	switch {
 	case ax >= ay && dx < 0:
-		return Left, true
+		return Left
 	case ax >= ay:
-		return Right, true
+		return Right
 	case dy < 0:
-		return Up, true
+		return Up
 	default:
-		return Down, true
+		return Down
+	}
+}
+
+// diagonal is the diagonal direction of a drag off both axes.
+func diagonal(dx, dy float64) Direction {
+	up, left := dy < 0, dx < 0
+	switch {
+	case up && left:
+		return UpLeft
+	case up:
+		return UpRight
+	case left:
+		return DownLeft
+	default:
+		return DownRight
 	}
 }
 

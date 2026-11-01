@@ -7,14 +7,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"burin/internal/field"
 	"burin/internal/snippet"
 )
 
-// keyApp is the field that may start a rule's content.
-const keyApp = "app"
+// Field keys. hold is a preamble field; app may start a rule's content.
+const (
+	keyHold = "hold"
+	keyApp  = "app"
+)
 
 // errLeft rejects a file for the left button, whose clicks and drags
 // select and move things everywhere.
@@ -22,8 +26,9 @@ var errLeft = errors.New("left button is not supported")
 
 // Load reads the .md files directly in dir, in lexical order. Each file
 // is named after its button (right.md, middle.md, button3.md) and holds
-// "## <direction> <title>" headings in snippet format; text before the
-// first heading is a comment. A missing dir is empty.
+// "## <direction> <title>" headings in snippet format, with an optional
+// ":hold: <duration>" line before the first heading; other text there is
+// a comment. A missing dir is empty.
 func Load(dir string) Set {
 	var s Set
 	dir = snippet.ResolveRoot(dir)
@@ -90,25 +95,62 @@ func isFile(path string) bool {
 }
 
 func loadFile(b Button, path string) Config {
-	c := Config{Button: b, File: path}
+	c := Config{Button: b, File: path, Preamble: Preamble{HoldDelay: DefaultHoldDelay}}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		c.Err = err
 		return c
 	}
-	c.Rules, c.Err = Parse(string(data))
+	c.Rules, c.Preamble, c.Err = Parse(string(data))
+	// Parse returns no rules only when they did not parse.
+	c.holdErrOnly = c.Err != nil && c.Rules != nil
 	if c.Err != nil {
 		c.Err = fmt.Errorf("%s: %w", filepath.Base(path), c.Err)
 	}
 	return c
 }
 
-// Parse reads the rules of a mouse file: snippet.Parse with the heading
-// split into the direction, its first word, and the title, the rest. The
-// ":app: <name>" lines at the start of the content, one app per line, limit
-// the rule to those apps, by name or bundle ID; they are not part of the
-// content.
-func Parse(data string) ([]Rule, error) {
+// Parse reads the rules of a mouse file and its preamble: the hold
+// delay, DefaultHoldDelay without a :hold: line. The rules are
+// snippet.Parse with the heading split into the direction, its first
+// word, and the title, the rest. The ":app: <name>" lines at the start of
+// the content, one app per line, limit the rule to those apps, by name or
+// bundle ID; they are not part of the content.
+//
+// An invalid :hold: line is an error, but the hold delay is then
+// DefaultHoldDelay and the rules are still returned, non-nil even when
+// there are none. Rules that do not parse return nil rules.
+func Parse(data string) ([]Rule, Preamble, error) {
+	hold, holdErr := parseHold(data)
+	pre := Preamble{HoldDelay: hold}
+	rules, err := parseRules(data)
+	if err != nil {
+		return nil, pre, errors.Join(err, holdErr)
+	}
+	return rules, pre, holdErr
+}
+
+// parseHold reads the :hold: line of the preamble. Zero is valid: the
+// compass then shows at once.
+func parseHold(data string) (time.Duration, error) {
+	value, ok, err := field.Preamble(data, keyHold)
+	if err != nil {
+		return DefaultHoldDelay, err
+	}
+	if !ok {
+		return DefaultHoldDelay, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return DefaultHoldDelay, fmt.Errorf(":hold: %w", err)
+	}
+	if d < 0 {
+		return DefaultHoldDelay, fmt.Errorf(":hold: %s is negative", value)
+	}
+	return d, nil
+}
+
+func parseRules(data string) ([]Rule, error) {
 	sections, err := snippet.Parse(data)
 	if err != nil {
 		return nil, err
@@ -118,7 +160,7 @@ func Parse(data string) ([]Rule, error) {
 		word, title := splitHeading(sec.Keyword)
 		dir, ok := directions[word]
 		if !ok {
-			return nil, fmt.Errorf("## %s: unknown direction %q, not left, right, up or down", sec.Keyword, word)
+			return nil, fmt.Errorf("## %s: unknown direction %q, not left, right, up, down, up-left, up-right, down-left or down-right", sec.Keyword, word)
 		}
 		apps, content, err := parseApps(sec.Content)
 		if err != nil {

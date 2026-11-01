@@ -43,20 +43,42 @@ func TestCenteredAt(t *testing.T) {
 func TestProgressOf(t *testing.T) {
 	const d = gesture.MinDistance
 	diag := d / math.Sqrt2
+	// corner is the progress of a diagonal at a projection of v on it.
+	corner := func(v float64) float32 { return float32(v / gesture.DiagonalMinDistance) }
 	for _, tc := range []struct {
 		name   string
 		dx, dy float64
 		want   Progress
 	}{
 		{"still", 0, 0, Progress{}},
-		{"straight up", 0, -d, Progress{Up: 1, Armed: gesture.Up}},
-		{"past the threshold", 3 * d, 0, Progress{Right: 1, Armed: gesture.Right}},
-		{"short of the threshold", -d / 2, 0, Progress{Left: 0.5}},
-		{"diagonal", diag, diag, Progress{Right: float32(diag / d), Down: float32(diag / d)}},
+		{"straight up", 0, -d, Progress{Up: 1, UpLeft: corner(diag), UpRight: corner(diag), Armed: gesture.Up}},
+		{"past the threshold", 3 * d, 0, Progress{Right: 1, UpRight: 1, DownRight: 1, Armed: gesture.Right}},
+		{"short of the threshold", -d / 2, 0, Progress{Left: 0.5, UpLeft: corner(diag / 2), DownLeft: corner(diag / 2)}},
+		{"diagonal", diag, diag, Progress{Right: float32(diag / d), Down: float32(diag / d), DownRight: corner(d)}},
 	} {
 		if got := progressOf(tc.dx, tc.dy); got != tc.want {
 			t.Errorf("%s: progressOf(%v, %v) = %+v, want %+v", tc.name, tc.dx, tc.dy, got, tc.want)
 		}
+	}
+}
+
+func TestProgressOfDiagonal(t *testing.T) {
+	p := progressOf(40, 40)
+	want := float32(40 * math.Sqrt2 / gesture.DiagonalMinDistance)
+	if math.Abs(float64(p.DownRight-want)) > 1e-6 {
+		t.Errorf("DownRight = %v, want %v", p.DownRight, want)
+	}
+	if p.Down != 1 || p.Right != 1 {
+		t.Errorf("Down %v, Right %v, want both 1", p.Down, p.Right)
+	}
+	if p.UpLeft != 0 || p.UpRight != 0 || p.DownLeft != 0 {
+		t.Errorf("other diagonals lit: %+v", p)
+	}
+	if p.Armed != "" {
+		t.Errorf("Armed = %q, want none", p.Armed)
+	}
+	if p := progressOf(50, 50); p.Armed != gesture.DownRight {
+		t.Errorf("progressOf(50, 50).Armed = %q, want %q", p.Armed, gesture.DownRight)
 	}
 }
 
@@ -105,6 +127,47 @@ func TestCompassLabels(t *testing.T) {
 	}
 }
 
+func TestCompassCorners(t *testing.T) {
+	d := Directions{Up: "Mission Control", Left: "Back"}
+	p := Progress{}
+	tt, size := compassTester(t, &d, &p)
+	cardinal := *size
+
+	d.DownRight = "Cancel"
+	d.UpLeft = "Close"
+	tt.Frame()
+	tt.SetSize(int(math.Ceil(float64(size[0]))), int(math.Ceil(float64(size[1]))))
+	tt.Frame()
+	savePNG(t, tt, "compass-corners")
+	larger := size[0] > cardinal[0] && size[1] > cardinal[1]
+	if !larger {
+		t.Errorf("size with corners %v, not larger than %v", *size, cardinal)
+	}
+	midX, midY := size[0]/2, size[1]/2
+	cancel, ok := tt.Find("Cancel")
+	if !ok {
+		t.Fatalf("missing Cancel in %q", tt.Texts())
+	}
+	closeLabel, ok := tt.Find("Close")
+	if !ok {
+		t.Fatalf("missing Close in %q", tt.Texts())
+	}
+	downRight := cancel.X >= midX+cornerGap && cancel.Y >= midY+cornerGap
+	if !downRight {
+		t.Errorf("down-right label %+v not past %v, %v", cancel, midX+cornerGap, midY+cornerGap)
+	}
+	upLeft := closeLabel.X+closeLabel.W <= midX-cornerGap && closeLabel.Y+closeLabel.H <= midY-cornerGap
+	if !upLeft {
+		t.Errorf("up-left label %+v not before %v, %v", closeLabel, midX-cornerGap, midY-cornerGap)
+	}
+	for _, r := range []ui.Rect{cancel, closeLabel} {
+		fits := r.X >= 0 && r.Y >= 0 && r.X+r.W <= size[0] && r.Y+r.H <= size[1]
+		if !fits {
+			t.Errorf("%+v does not fit %v", r, *size)
+		}
+	}
+}
+
 // hasColorIn reports whether a pixel of r in tt's frame is about c.
 func hasColorIn(tt *ui.Tester, r ui.Rect, c ui.Color) bool {
 	// The tester draws at scale 1: a DIP is a pixel.
@@ -144,9 +207,9 @@ func TestCompassArmed(t *testing.T) {
 }
 
 func TestStyleOf(t *testing.T) {
-	th := &ui.Theme{TextMuted: ui.Hex("#808080"), Border: ui.Hex("#404040")}
+	th := &ui.Theme{Text: ui.Hex("#f0f0f0"), Border: ui.Hex("#404040")}
 	rest := styleOf(th, 0, false)
-	if rest.text != th.TextMuted || rest.border != th.Border || rest.glow || rest.pad != 0 {
+	if rest.text != th.Text || rest.border != th.Border || rest.glow || rest.pad != 0 {
 		t.Errorf("at rest %+v", rest)
 	}
 	if near := styleOf(th, 1, false); near.text != progressColor || near.border != progressColor {

@@ -15,7 +15,11 @@ import (
 const (
 	// cursorGap is the distance from the pointer to the near edge of a
 	// label, leaving the pointer in sight in the middle.
-	cursorGap  = 36
+	cursorGap = 36
+	// cornerGap is the distance on both axes from the pointer to the
+	// inner corner of a diagonal label: cursorGap scaled as the diagonal
+	// gestures' threshold is, so they sit farther out.
+	cornerGap  = cursorGap * gesture.DiagonalMinDistance / gesture.MinDistance
 	pillPadX   = 8
 	pillPadY   = 3
 	pillRadius = 6
@@ -44,10 +48,15 @@ var (
 	armedColor = keyColor
 )
 
+// pillAlpha is the opacity of a label's background, so that what is
+// under the compass shows through.
+const pillAlpha = 0.8
+
 // Directions are the titles of the gestures of the held button by
 // direction; an empty title is a direction without a gesture.
 type Directions struct {
-	Up, Down, Left, Right string
+	Up, Down, Left, Right                string
+	UpLeft, UpRight, DownLeft, DownRight string
 }
 
 // Empty reports whether no direction has a gesture.
@@ -64,6 +73,14 @@ func (d *Directions) slot(dir gesture.Direction) *string {
 		return &d.Left
 	case gesture.Right:
 		return &d.Right
+	case gesture.UpLeft:
+		return &d.UpLeft
+	case gesture.UpRight:
+		return &d.UpRight
+	case gesture.DownLeft:
+		return &d.DownLeft
+	case gesture.DownRight:
+		return &d.DownRight
 	}
 	return nil
 }
@@ -84,11 +101,13 @@ func (d *Directions) Add(dir gesture.Direction, title string) {
 }
 
 // Progress is how far the pointer went towards each direction, from 0 at
-// the press to 1 at gesture.MinDistance, and the direction a release
-// would recognize, if any.
+// the press to 1 at gesture.MinDistance for the axes and at
+// gesture.DiagonalMinDistance for the diagonals, and the direction a
+// release would recognize, if any.
 type Progress struct {
-	Up, Down, Left, Right float32
-	Armed                 gesture.Direction
+	Up, Down, Left, Right                float32
+	UpLeft, UpRight, DownLeft, DownRight float32
+	Armed                                gesture.Direction
 }
 
 // of is the progress towards dir.
@@ -102,20 +121,41 @@ func (p Progress) of(dir gesture.Direction) float32 {
 		return p.Left
 	case gesture.Right:
 		return p.Right
+	case gesture.UpLeft:
+		return p.UpLeft
+	case gesture.UpRight:
+		return p.UpRight
+	case gesture.DownLeft:
+		return p.DownLeft
+	case gesture.DownRight:
+		return p.DownRight
 	}
 	return 0
 }
 
 // total is the progress towards the direction the pointer went furthest.
-func (p Progress) total() float32 { return max(p.Up, p.Down, p.Left, p.Right) }
+func (p Progress) total() float32 {
+	return max(p.Up, p.Down, p.Left, p.Right, p.UpLeft, p.UpRight, p.DownLeft, p.DownRight)
+}
 
 // progressOf is the progress of a pointer dx, dy from the press, y down
 // as in CoreGraphics. Each direction lights up by the pointer's
-// projection on it, so a diagonal lights two; only gesture.Classify arms
-// one, so that the compass tells what a release would do.
+// projection on it, so a drag lights several; the diagonals light up
+// over gesture.DiagonalMinDistance, more slowly, as they need a longer
+// drag. Only gesture.Classify arms one, so that the compass tells what a
+// release would do.
 func progressOf(dx, dy float64) Progress {
-	t := func(v float64) float32 { return float32(min(max(v/gesture.MinDistance, 0), 1)) }
-	p := Progress{Up: t(-dy), Down: t(dy), Left: t(-dx), Right: t(dx)}
+	// frac is v as a fraction of dist, kept between 0 and 1.
+	frac := func(v, dist float64) float32 { return float32(min(max(v/dist, 0), 1)) }
+	t := func(v float64) float32 { return frac(v, gesture.MinDistance) }
+	// diag is the progress along the diagonal (sx, sy)/√2.
+	diag := func(sx, sy float64) float32 {
+		return frac((sx*dx+sy*dy)/math.Sqrt2, gesture.DiagonalMinDistance)
+	}
+	p := Progress{
+		Up: t(-dy), Down: t(dy), Left: t(-dx), Right: t(dx),
+		UpLeft: diag(-1, -1), UpRight: diag(1, -1), DownLeft: diag(-1, 1), DownRight: diag(1, 1),
+	}
 	if dir, ok := gesture.Classify(dx, dy); ok {
 		p.Armed = dir
 	}
@@ -282,7 +322,10 @@ func (c *Compass) view(ctx *ui.Context) {
 }
 
 // compassDirs are the directions in the order the labels are built.
-var compassDirs = []gesture.Direction{gesture.Up, gesture.Down, gesture.Left, gesture.Right}
+var compassDirs = []gesture.Direction{
+	gesture.Up, gesture.Down, gesture.Left, gesture.Right,
+	gesture.UpLeft, gesture.UpRight, gesture.DownLeft, gesture.DownRight,
+}
 
 // pillStyle is how a label looks at its progress.
 type pillStyle struct {
@@ -291,7 +334,7 @@ type pillStyle struct {
 	glow         bool
 }
 
-// styleOf is the style of a label at progress t, armed or not: gray at
+// styleOf is the style of a label at progress t, armed or not: plain text at
 // rest, turning to the progress color as the pointer nears, and the
 // armed color, grown and glowing, once a release would run it.
 func styleOf(th *ui.Theme, t float32, armed bool) pillStyle {
@@ -299,7 +342,7 @@ func styleOf(th *ui.Theme, t float32, armed bool) pillStyle {
 		return pillStyle{text: armedColor, border: armedColor, pad: armedGrow, glow: true}
 	}
 	return pillStyle{
-		text:   th.TextMuted.Mix(progressColor, t),
+		text:   th.Text.Mix(progressColor, t),
 		border: th.Border.Mix(progressColor, t),
 	}
 }
@@ -318,7 +361,7 @@ func buildCompass(c *ui.Context, d Directions, p Progress, dx, dy float64) (widt
 		textW, textH, w, h float32
 	}
 	var labels []label
-	var sideW, sideH, stackW, stackH float32
+	var sideW, sideH, stackW, stackH, cornerW, cornerH float32
 	for _, dir := range compassDirs {
 		title := d.title(dir)
 		if title == "" {
@@ -329,25 +372,34 @@ func buildCompass(c *ui.Context, d Directions, p Progress, dx, dy float64) (widt
 		l := label{dir: dir, title: title, textW: tw, textH: tht,
 			w: tw + 2*(pillPadX+pillBorder), h: tht + 2*(pillPadY+pillBorder)}
 		labels = append(labels, l)
-		vertical := dir == gesture.Up || dir == gesture.Down
-		if vertical {
+		switch dir {
+		case gesture.Up, gesture.Down:
 			stackW, stackH = max(stackW, l.w), max(stackH, l.h)
-		} else {
+		case gesture.Left, gesture.Right:
 			sideW, sideH = max(sideW, l.w), max(sideH, l.h)
+		default:
+			cornerW, cornerH = max(cornerW, l.w), max(cornerH, l.h)
 		}
 	}
 	// Sized for armed labels, which grow, so that arming one does not
 	// resize the window.
 	grow := float32(2 * armedGrow)
-	width = max(2*(cursorGap+sideW+grow), stackW+grow) + 2*glowRoom
-	height = max(2*(cursorGap+stackH+grow), sideH+grow) + 2*glowRoom
+	// Corner labels reach cornerGap plus their size from the middle on
+	// both axes.
+	var cornerX, cornerY float32
+	if cornerW > 0 {
+		cornerX, cornerY = 2*(cornerGap+cornerW+grow), 2*(cornerGap+cornerH+grow)
+	}
+	width = max(2*(cursorGap+sideW+grow), stackW+grow, cornerX) + 2*glowRoom
+	height = max(2*(cursorGap+stackH+grow), sideH+grow, cornerY) + 2*glowRoom
 	midX, midY := width/2, height/2
 
 	for _, l := range labels {
 		armed := p.Armed == l.dir
 		st := styleOf(th, p.of(l.dir), armed)
 		w, h := l.w+2*st.pad, l.h+2*st.pad
-		// The near edge stays cursorGap from the middle as a label grows.
+		// The near edge stays cursorGap from the middle as a label grows,
+		// and the inner corner of a diagonal label cornerGap on both axes.
 		var x, y float32
 		switch l.dir {
 		case gesture.Up:
@@ -358,10 +410,18 @@ func buildCompass(c *ui.Context, d Directions, p Progress, dx, dy float64) (widt
 			x, y = midX-cursorGap-w, midY-h/2
 		case gesture.Right:
 			x, y = midX+cursorGap, midY-h/2
+		case gesture.UpLeft:
+			x, y = midX-cornerGap-w, midY-cornerGap-h
+		case gesture.UpRight:
+			x, y = midX+cornerGap, midY-cornerGap-h
+		case gesture.DownLeft:
+			x, y = midX-cornerGap-w, midY+cornerGap
+		case gesture.DownRight:
+			x, y = midX+cornerGap, midY+cornerGap
 		}
 		pill := ui.Row(c.Key(string(l.dir))).Absolute().Left(x).Top(y).Width(w).Height(h).
 			AlignItems(ui.Center).Justify(ui.Center).
-			Background(th.Surface).Radius(pillRadius).Border(pillBorder, st.border)
+			Background(th.Surface.Alpha(pillAlpha)).Radius(pillRadius).Border(pillBorder, st.border)
 		if st.glow {
 			pill.Shadow(0, 0, glowBlur, glowSpread, armedColor.Alpha(0.6))
 		}

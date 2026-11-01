@@ -11,6 +11,7 @@
 package field
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
@@ -39,4 +40,29 @@ func Value(s, key string) (value string, ok bool) {
 		return "", false
 	}
 	return v, true
+}
+
+// Preamble returns the value of the field named key among the lines of
+// data before its first "## " heading, and whether there is one; more
+// than one is an error. Leader and mouse files keep their file-wide
+// settings there, as snippet.Parse discards those lines. Lines are
+// trimmed, so they may be indented, and lines that are not a field of
+// that key are a comment.
+func Preamble(data, key string) (value string, ok bool, err error) {
+	// TrimSpace drops a CRLF line's \r, so the data is not copied to
+	// normalize line endings.
+	for line := range strings.Lines(data) {
+		if strings.HasPrefix(line, "## ") {
+			break
+		}
+		v, isField := Value(strings.TrimSpace(line), key)
+		if !isField {
+			continue
+		}
+		if ok {
+			return "", false, fmt.Errorf("duplicate :%s: line", key)
+		}
+		value, ok = v, true
+	}
+	return value, ok, nil
 }

@@ -81,13 +81,20 @@ type burin struct {
 	spawn func(fn func())
 
 	// The compass shows the gestures of the held button around the
-	// press. Its contents are worked out off the tap thread, as the
-	// frontmost app is asked on the main thread: hudGen counts the
-	// presses and releases, so a show that a later release or press made
-	// stale is dropped, and hudMu orders that check and the show with the
-	// hides.
+	// press, once the button has been held for its hold delay. Its
+	// contents are worked out off the tap thread, as the frontmost app is
+	// asked on the main thread: hudGen counts the presses and releases,
+	// so a show that a later release or press made stale, delayed or on
+	// its way, is dropped, and hudMu orders that check and the show with
+	// the hides.
 	hudGen atomic.Uint64
 	hudMu  sync.Mutex
+	// after runs fn once d has passed: time.AfterFunc, or a stand-in in
+	// tests. hudTimer is the delayed show of the press being tracked, nil
+	// once stopped; b.gestureMu guards it. Stopping it only saves work, as
+	// hudGen drops the show anyway.
+	after    func(d time.Duration, fn func()) *time.Timer
+	hudTimer *time.Timer
 	// showGestureHUD shows the gestures by direction around the press at
 	// x, y, and hideGestureHUD hides them. Tests stand in for them.
 	showGestureHUD func(dirs hud.Directions, x, y float64)
@@ -358,7 +365,8 @@ func (b *burin) handleGesture(eventType uint32, event uintptr) bool {
 }
 
 // press starts tracking a press of button at x, y, keeps a copy of it to
-// replay and shows its gestures in the compass. A press that cannot be copied
+// replay and shows its gestures in the compass after the button's hold
+// delay. A press that cannot be copied
 // could not be replayed, so it is passed on and not tracked. b.gestureMu
 // is held.
 func (b *burin) press(button gesture.Button, event uintptr, x, y float64) bool {
@@ -374,15 +382,40 @@ func (b *burin) press(button gesture.Button, event uintptr, x, y float64) bool {
 		return false
 	}
 	b.recognizer.Handle(gesture.Press, button, x, y)
-	b.showHUD(button, x, y)
+	b.scheduleHUD(button, x, y)
 	return true
 }
 
-// showHUD shows the gestures of button over the frontmost app in the
-// compass around the press at x, y, on a goroutine: the tap thread must
-// not wait for the main thread.
-func (b *burin) showHUD(button gesture.Button, x, y float64) {
+// scheduleHUD shows the compass for a press of button at x, y once the
+// button has been held for its hold delay, so that a plain click does not
+// flash it, or at once with no delay. A release or another press in the
+// meantime makes the show stale. b.gestureMu is held.
+func (b *burin) scheduleHUD(button gesture.Button, x, y float64) {
+	b.stopHUDTimer()
 	gen := b.hudGen.Add(1)
+	delay := b.gestures.Load().HoldDelay(button)
+	if delay <= 0 {
+		b.showHUD(gen, button, x, y)
+		return
+	}
+	b.hudTimer = b.after(delay, func() { b.showHUD(gen, button, x, y) })
+}
+
+// stopHUDTimer stops the delayed show of the compass, if any.
+// b.gestureMu is held.
+func (b *burin) stopHUDTimer() {
+	if b.hudTimer == nil {
+		return
+	}
+	b.hudTimer.Stop()
+	b.hudTimer = nil
+}
+
+// showHUD shows the gestures of button over the frontmost app in the
+// compass around the press at x, y, on a goroutine: neither the tap
+// thread nor a timer's must wait for the main thread. gen is the press's
+// generation; a release or press since drops the show.
+func (b *burin) showHUD(gen uint64, button gesture.Button, x, y float64) {
 	set := b.gestures.Load()
 	b.spawn(func() {
 		dirs := gestureDirections(set.Available(button, b.io.frontApp()))
@@ -398,10 +431,11 @@ func (b *burin) showHUD(button gesture.Button, x, y float64) {
 	})
 }
 
-// hideHUD hides the compass, on a goroutine like showHUD, and
-// drops a show still on its way. A press since makes the hide stale: its
-// show, run first, must not be hidden.
+// hideHUD hides the compass, on a goroutine like showHUD, and drops a
+// show still delayed or on its way. A press since makes the hide stale:
+// its show, run first, must not be hidden. b.gestureMu is held.
 func (b *burin) hideHUD() {
+	b.stopHUDTimer()
 	gen := b.hudGen.Add(1)
 	b.spawn(func() { b.ifLatestHUD(gen, b.hideGestureHUD) })
 }
@@ -719,9 +753,22 @@ func (b *burin) reloadMouse() {
 	set := gesture.Load(b.mouseDir)
 	b.gestures.Store(&set)
 	b.setMouseMask(set.Mask())
-	for _, err := range set.AllErrors() {
+	for _, err := range set.Errors {
 		log.Printf("mouse: %v", err)
 		notify("Mouse gestures skipped", err.Error())
+	}
+	for _, c := range set.Configs {
+		if c.Err == nil {
+			continue
+		}
+		log.Printf("mouse: %v", c.Err)
+		// A usable config with an error only has a bad :hold: line, so
+		// its gestures still work.
+		title := "Mouse gestures skipped"
+		if c.Usable() {
+			title = "Mouse gesture :hold: ignored"
+		}
+		notify(title, c.Err.Error())
 	}
 	status := mouseStatusText(set)
 	log.Printf("loaded %s from %s", status, b.mouseDir)
@@ -831,6 +878,7 @@ func main() {
 		ex:              expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
 		io:              systemEventIO(),
 		spawn:           goSpawn,
+		after:           time.AfterFunc,
 	}
 	b.startTap = b.startEventTap
 	b.showGestureHUD = b.showGestureCompass

@@ -195,30 +195,9 @@ func Parse(data string) ([]Entry, Preamble, error) {
 	return entries, pre, preambleErr
 }
 
-// preambleValue returns the value of the preamble field named key, and
-// whether there is one; more than one is an error. The preamble is the
-// lines before the first heading, which snippet.Parse discards; lines
-// that are not one of its fields are a comment.
-func preambleValue(data, key string) (value string, ok bool, err error) {
-	for line := range strings.Lines(strings.ReplaceAll(data, "\r\n", "\n")) {
-		if strings.HasPrefix(line, "## ") {
-			break
-		}
-		v, isField := field.Value(strings.TrimSpace(line), key)
-		if !isField {
-			continue
-		}
-		if ok {
-			return "", false, fmt.Errorf("duplicate :%s: line", key)
-		}
-		value, ok = v, true
-	}
-	return value, ok, nil
-}
-
 // parseHold reads the :hold: line of the preamble.
 func parseHold(data string) (time.Duration, error) {
-	value, ok, err := preambleValue(data, keyHold)
+	value, ok, err := field.Preamble(data, keyHold)
 	if err != nil {
 		return DefaultHoldDelay, err
 	}
@@ -237,7 +216,7 @@ func parseHold(data string) (time.Duration, error) {
 
 // parseLayout reads the :layout: line of the preamble.
 func parseLayout(data string) (Layout, error) {
-	value, ok, err := preambleValue(data, keyLayout)
+	value, ok, err := field.Preamble(data, keyLayout)
 	if err != nil {
 		return LayoutList, err
 	}

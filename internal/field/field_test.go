@@ -53,3 +53,33 @@ func TestValue(t *testing.T) {
 		}
 	}
 }
+
+func TestPreamble(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		value   string
+		ok      bool
+		wantErr bool
+	}{
+		{name: "found", data: "my file\n  :hold: 150ms  \n## left\nx\n", value: "150ms", ok: true},
+		{name: "empty value", data: ":hold:\n## left\nx\n", value: "", ok: true},
+		{name: "missing", data: "hold: 1s\n:holds: 1s\n## left\nx\n"},
+		{name: "no heading", data: ":hold: 1s\n", value: "1s", ok: true},
+		{name: "duplicate", data: ":hold: 1s\n:hold: 2s\n## left\nx\n", wantErr: true},
+		{name: "after heading", data: "## left\n:hold: 1s\n"},
+		{name: "duplicate after heading", data: ":hold: 1s\n## left\n:hold: 2s\n", value: "1s", ok: true},
+		{name: "CRLF", data: "comment\r\n:hold: 1s\r\n## left\r\n:hold: 2s\r\n", value: "1s", ok: true},
+		{name: "other key", data: ":layout: rows\n:hold: 1s\n## left\nx\n", value: "1s", ok: true},
+	}
+	for _, tt := range tests {
+		value, ok, err := Preamble(tt.data, "hold")
+		if (err != nil) != tt.wantErr {
+			t.Errorf("%s: err = %v, want error %v", tt.name, err, tt.wantErr)
+			continue
+		}
+		if value != tt.value || ok != tt.ok {
+			t.Errorf("%s: Preamble = %q, %v; want %q, %v", tt.name, value, ok, tt.value, tt.ok)
+		}
+	}
+}

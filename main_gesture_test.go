@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"burin/internal/gesture"
 	"burin/internal/hud"
@@ -141,7 +142,8 @@ const (
 
 // newGestureBurin returns a burin with right-button gestures: left runs
 // "back" in every app, up runs only in Safari. The right press is at
-// 500, 500.
+// 500, 500. The buttons have no hold delay, so a press shows the compass
+// at once; withHoldDelay gives the right button one.
 func newGestureBurin(t *testing.T) (*burin, *fakeIO, *[]string) {
 	f := newFakeIO(t)
 	for _, ev := range []uintptr{rightDown, rightDrag, rightUp, marked} {
@@ -170,7 +172,52 @@ func newGestureBurin(t *testing.T) (*burin, *fakeIO, *[]string) {
 	}}
 	b.gestures.Store(&set)
 	f.hudFuncs(b)
+	b.after = func(d time.Duration, fn func()) *time.Timer {
+		t.Errorf("show scheduled after %v with no hold delay", d)
+		return nil
+	}
 	return b, f, &ran
+}
+
+// fakeAfter stands in for time.AfterFunc: it records the delays and the
+// callbacks, which a test fires, and returns real timers that would only
+// fire, doing nothing, after an hour, so a test can tell whether they
+// were stopped.
+type fakeAfter struct {
+	t      *testing.T
+	delays []time.Duration
+	fns    []func()
+	timers []*time.Timer
+}
+
+func (a *fakeAfter) after(d time.Duration, fn func()) *time.Timer {
+	timer := time.AfterFunc(time.Hour, func() {})
+	a.t.Cleanup(func() { timer.Stop() })
+	a.delays = append(a.delays, d)
+	a.fns = append(a.fns, fn)
+	a.timers = append(a.timers, timer)
+	return timer
+}
+
+// stopped reports whether timer i was stopped, and stops it.
+func (a *fakeAfter) stopped(i int) bool {
+	return !a.timers[i].Stop()
+}
+
+// withHoldDelay gives b's right button a hold delay of d and schedules
+// its shows on a fakeAfter.
+func withHoldDelay(t *testing.T, b *burin, d time.Duration) *fakeAfter {
+	set := *b.gestures.Load()
+	set.Configs = append([]gesture.Config(nil), set.Configs...)
+	for i := range set.Configs {
+		if set.Configs[i].Button == gesture.ButtonRight {
+			set.Configs[i].HoldDelay = d
+		}
+	}
+	b.gestures.Store(&set)
+	a := &fakeAfter{t: t}
+	b.after = a.after
+	return a
 }
 
 // drag sends a right drag far from the press, which must not count: the
@@ -283,6 +330,28 @@ func TestGestureRunsRule(t *testing.T) {
 	f.checkSettled()
 }
 
+func TestGestureEmptyRuleSwallowsClick(t *testing.T) {
+	b, f, ran := newGestureBurin(t)
+	set := gesture.Set{Configs: []gesture.Config{
+		{Button: gesture.ButtonRight, Rules: []gesture.Rule{
+			{Direction: gesture.DownRight, Title: "Cancel", Content: ""},
+		}},
+	}}
+	b.gestures.Store(&set)
+	b.handleGesture(gesture.EventRightMouseDown, rightDown)
+	releaseBy(f, 50, 50)
+	if !b.handleGesture(gesture.EventRightMouseUp, rightUp) {
+		t.Fatal("release passed")
+	}
+	// The rule runs its empty content, which does nothing, and the click
+	// is not replayed.
+	if !reflect.DeepEqual(*ran, []string{""}) {
+		t.Fatalf("ran %q", *ran)
+	}
+	f.checkCalls("release rightDown", "release rightUp")
+	f.checkSettled()
+}
+
 func TestGestureWithoutRuleReplays(t *testing.T) {
 	b, f, ran := newGestureBurin(t)
 	f.front = workspace.App{Name: "Notes"}
@@ -330,11 +399,11 @@ func TestGestureHUD(t *testing.T) {
 	b, f, _ := newGestureBurin(t)
 	f.front = workspace.App{Name: "Notes"}
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
-	f.checkHUD("{Up: Down: Left:Back Right:}@500,500")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500")
 	drag(b, f)
-	f.checkHUD("{Up: Down: Left:Back Right:}@500,500")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500")
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("{Up: Down: Left:Back Right:}@500,500", "hide")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500", "hide")
 
 	// A gesture over Safari also shows its rule, untitled.
 	b, f, _ = newGestureBurin(t)
@@ -342,7 +411,7 @@ func TestGestureHUD(t *testing.T) {
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
 	releaseBy(f, -50, 0)
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("{Up:up Down: Left:Back Right:}@500,500", "hide")
+	f.checkHUD("{Up:up Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500", "hide")
 
 	// A button without rules shows nothing: its press and release hide.
 	b, f, _ = newGestureBurin(t)
@@ -355,7 +424,7 @@ func TestGestureHUD(t *testing.T) {
 	f.failCopy[rightUp] = true
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("{Up: Down: Left:Back Right:}@500,500", "hide")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500", "hide")
 }
 
 func TestGestureHUDStaleShow(t *testing.T) {
@@ -387,7 +456,70 @@ func TestGestureHUDStaleHide(t *testing.T) {
 	for _, fn := range pending[:last] {
 		fn()
 	}
-	f.checkHUD("{Up: Down: Left:Back Right:}@500,500")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500")
+}
+
+func TestGestureHUDNoHoldDelay(t *testing.T) {
+	// newGestureBurin's after fails the test if a show is scheduled.
+	b, f, _ := newGestureBurin(t)
+	b.handleGesture(gesture.EventRightMouseDown, rightDown)
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500")
+	if b.hudTimer != nil {
+		t.Fatal("timer kept with no hold delay")
+	}
+}
+
+func TestGestureHUDHoldDelay(t *testing.T) {
+	b, f, _ := newGestureBurin(t)
+	a := withHoldDelay(t, b, 150*time.Millisecond)
+	b.handleGesture(gesture.EventRightMouseDown, rightDown)
+	// Nothing shows until the button has been held for the delay.
+	f.checkHUD()
+	if !reflect.DeepEqual(a.delays, []time.Duration{150 * time.Millisecond}) {
+		t.Fatalf("delays = %v", a.delays)
+	}
+	a.fns[0]()
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500")
+	b.handleGesture(gesture.EventRightMouseUp, rightUp)
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500", "hide")
+}
+
+func TestGestureHUDReleaseBeforeHoldDelay(t *testing.T) {
+	b, f, ran := newGestureBurin(t)
+	a := withHoldDelay(t, b, 150*time.Millisecond)
+	b.handleGesture(gesture.EventRightMouseDown, rightDown)
+	releaseBy(f, -50, 0)
+	b.handleGesture(gesture.EventRightMouseUp, rightUp)
+	if !a.stopped(0) {
+		t.Error("release left the timer running")
+	}
+	if b.hudTimer != nil {
+		t.Error("timer kept after the release")
+	}
+	// A timer that fired all the same is dropped: nothing stays up.
+	a.fns[0]()
+	f.checkHUD("hide")
+	// The gesture does not wait for the compass.
+	if !reflect.DeepEqual(*ran, []string{"back"}) {
+		t.Fatalf("ran %q", *ran)
+	}
+	f.checkSettled()
+}
+
+func TestGestureHUDPressBeforeHoldDelay(t *testing.T) {
+	b, f, _ := newGestureBurin(t)
+	a := withHoldDelay(t, b, 150*time.Millisecond)
+	b.handleGesture(gesture.EventRightMouseDown, rightDown)
+	f.loc[rightDown] = [2]float64{600, 600}
+	b.handleGesture(gesture.EventRightMouseDown, rightDown)
+	if !a.stopped(0) {
+		t.Error("second press left the first timer running")
+	}
+	// The first press's show is stale; the second's shows at its press.
+	a.fns[0]()
+	f.checkHUD()
+	a.fns[1]()
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@600,600")
 }
 
 // fakeTap is a running tap whose Stop succeeds or not.
@@ -512,6 +644,10 @@ func TestGestureDirections(t *testing.T) {
 			{Direction: gesture.Up, Title: "Mission Control"},
 			{Direction: gesture.Right},
 		}, hud.Directions{Up: "Mission Control", Left: "Back", Right: "right"}},
+		{"diagonals", []gesture.Rule{
+			{Direction: gesture.UpLeft, Title: "Close"},
+			{Direction: gesture.DownRight},
+		}, hud.Directions{UpLeft: "Close", DownRight: "down-right"}},
 	} {
 		if got := gestureDirections(tc.rules); got != tc.want {
 			t.Errorf("%s: gestureDirections = %+v, want %+v", tc.name, got, tc.want)

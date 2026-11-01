@@ -11,42 +11,42 @@ import (
 // exampleFile is the configuration of the plan, config.lua in md form.
 const exampleFile = `Slack 重启后记不住位置，钉在 BenQ 左上角
 ## Slack
-screen_w: 1920
-screen_h: 1280
-anchor: topLeft
-mainTitle: \[Main\]
-width_min: 0.7
-width_max: 0.9
-height_min: 0.5
-height_max: 0.8
+:screen_w: 1920
+:screen_h: 1280
+:anchor: topLeft
+:mainTitle: \[Main\]
+:width_min: 0.7
+:width_max: 0.9
+:height_min: 0.5
+:height_max: 0.8
 
 设置窗口 General 没全屏按钮，用 fullScreenable 排除
 ## Yab
-screen_w: 1920
-screen_h: 1280
-anchor: bottomLeft
-fullScreenable: true
-width_min: 0.7
-width_max: 0.9
-height_min: 0.5
-height_max: 0.8
+:screen_w: 1920
+:screen_h: 1280
+:anchor: bottomLeft
+:fullScreenable: true
+:width_min: 0.7
+:width_max: 0.9
+:height_min: 0.5
+:height_max: 0.8
 
 ## Trello
-screen_w: 1080
-screen_h: 1920
-anchor: bottomLeft
-width_min: 0.95
-width_max: 1
-height_min: 0.3
-height_max: 0.4
+:screen_w: 1080
+:screen_h: 1920
+:anchor: bottomLeft
+:width_min: 0.95
+:width_max: 1
+:height_min: 0.3
+:height_max: 0.4
 
 BenQ 上其他窗口左边留 66px 露出 Slack 侧栏
 ## left margin
-screen_w: 1920
-screen_h: 1280
-margin: 66
-except: Finder
-except: Foo
+:screen_w: 1920
+:screen_h: 1280
+:margin: 66
+:except: Finder
+:except: Foo
 `
 
 // comparableRule makes rules comparable: compiled regexps hold internal
@@ -100,11 +100,11 @@ func TestParseExample(t *testing.T) {
 	}
 }
 
-const validPin = `anchor: topLeft
-width_min: 0.5
-width_max: 0.9
-height_min: 0.5
-height_max: 0.9
+const validPin = `:anchor: topLeft
+:width_min: 0.5
+:width_max: 0.9
+:height_min: 0.5
+:height_max: 0.9
 `
 
 func TestParseSectionErrors(t *testing.T) {
@@ -113,22 +113,23 @@ func TestParseSectionErrors(t *testing.T) {
 		section string
 		wantErr string
 	}{
-		{"缺 anchor", strings.Replace(validPin, "anchor: topLeft\n", "", 1), "anchor: is required"},
+		{"缺 anchor", strings.Replace(validPin, ":anchor: topLeft\n", "", 1), ":anchor: is required"},
+		{"旧写法 anchor: 不再是字段", strings.Replace(validPin, ":anchor: topLeft", "anchor: topLeft", 1), ":anchor: is required"},
 		{"anchor 拼错", strings.Replace(validPin, "topLeft", "topRight", 1), `"topRight" is not topLeft or bottomLeft`},
-		{"缺 width_max", strings.Replace(validPin, "width_max: 0.9\n", "", 1), "width_max: is required"},
-		{"min 大于 max", strings.Replace(validPin, "width_min: 0.5", "width_min: 0.95", 1), "need 0 <= min <= max <= 1"},
-		{"max 大于 1", strings.Replace(validPin, "height_max: 0.9", "height_max: 1.5", 1), "need 0 <= min <= max <= 1"},
-		{"不是数字", strings.Replace(validPin, "height_min: 0.5", "height_min: half", 1), `"half" is not a number`},
-		{"screen 不成对", validPin + "screen_w: 1920\n", "go together"},
-		{"未知 key", validPin + "widht_min: 0.5\n", `unknown key "widht_min"`},
-		{"重复 key", validPin + "anchor: bottomLeft\n", "duplicate anchor:"},
-		{"坏正则", validPin + "title: [\n", "title:"},
-		{"fullScreenable 非布尔", validPin + "fullScreenable: maybe\n", `"maybe" is not true or false`},
-		{"钉位规则不收 except", validPin + "except: Finder\n", "except: is not a key of a pin rule"},
-		{"边距缺 screen", "margin: 66\n", "screen_w: and screen_h: are required"},
-		{"边距负数", "screen_w: 1920\nscreen_h: 1280\nmargin: -1\n", "is negative"},
-		{"边距不收 anchor", "screen_w: 1920\nscreen_h: 1280\nmargin: 66\nanchor: topLeft\n", "anchor: is not a key of a margin rule"},
-		{"except 空", "screen_w: 1920\nscreen_h: 1280\nmargin: 66\nexcept:\n", "except: needs an app name"},
+		{"缺 width_max", strings.Replace(validPin, ":width_max: 0.9\n", "", 1), ":width_max: is required"},
+		{"min 大于 max", strings.Replace(validPin, ":width_min: 0.5", ":width_min: 0.95", 1), "need 0 <= min <= max <= 1"},
+		{"max 大于 1", strings.Replace(validPin, ":height_max: 0.9", ":height_max: 1.5", 1), "need 0 <= min <= max <= 1"},
+		{"不是数字", strings.Replace(validPin, ":height_min: 0.5", ":height_min: half", 1), `"half" is not a number`},
+		{"screen 不成对", validPin + ":screen_w: 1920\n", "go together"},
+		{"未知 key", validPin + ":widht_min: 0.5\n", `unknown key "widht_min"`},
+		{"重复 key", validPin + ":anchor: bottomLeft\n", "duplicate :anchor:"},
+		{"坏正则", validPin + ":title: [\n", ":title:"},
+		{"fullScreenable 非布尔", validPin + ":fullScreenable: maybe\n", `"maybe" is not true or false`},
+		{"钉位规则不收 except", validPin + ":except: Finder\n", ":except: is not a key of a pin rule"},
+		{"边距缺 screen", ":margin: 66\n", ":screen_w: and :screen_h: are required"},
+		{"边距负数", ":screen_w: 1920\n:screen_h: 1280\n:margin: -1\n", "is negative"},
+		{"边距不收 anchor", ":screen_w: 1920\n:screen_h: 1280\n:margin: 66\n:anchor: topLeft\n", ":anchor: is not a key of a margin rule"},
+		{"except 空", ":screen_w: 1920\n:screen_h: 1280\n:margin: 66\n:except:\n", ":except: needs an app name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -154,7 +155,7 @@ func TestParseSectionErrors(t *testing.T) {
 }
 
 func TestParseCommentsAndOptionalScreen(t *testing.T) {
-	data := "前言\n## kitty\n随便写点注释\n" + validPin + "说明：全角冒号是注释\n"
+	data := "前言\n## kitty\n随便写点注释\n注意: 不要这样写\n" + validPin + "说明：全角冒号是注释\nTODO: margin\n"
 	set := Parse(data)
 	if len(set.Errors) != 0 {
 		t.Fatalf("Errors = %+v, want none", set.Errors)

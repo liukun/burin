@@ -14,7 +14,7 @@ Each file in `~/.config/burin/leaders/` is one leader, named after its trigger k
 `cmd_l cmd_r opt_l opt_r ctrl_l ctrl_r shift_l shift_r fn f1`…`f20` and the keypad
 operators `kp_minus kp_plus kp_multiply kp_divide kp_enter kp_clear`, and `tab` (e.g.
 `cmd_r.md`). The format is the snippet format with `## <key> <title>` headings; text before
-the first heading is a comment, except `hold:` and `layout:` lines:
+the first heading is a comment, except `:hold:` and `:layout:` lines:
 
 ```markdown
 ## k Kitty
@@ -45,37 +45,37 @@ app, its bundle ID. A non-empty result is copied to the clipboard and announced;
 one (`|null`) does nothing more. The HUD marks a running entry `●`, a finished one `✓` (for a second) and a failed one
 `✗`. A file's own trigger key cannot be one of its entries.
 
-A `hold: <duration>` line before the first heading (`hold: 200ms`, `hold: 0.2s`) puts an
+A `:hold: <duration>` line before the first heading (`:hold: 200ms`, `:hold: 0.2s`) puts an
 ordinary trigger key in hold mode, so it keeps its usual function: a tap types the key as
 usual, and only holding it for the duration shows the HUD. Pressing another key before
 then types the trigger key followed by that key, and pressing the trigger together with
 Shift, Control, Option or Command (`cmd+tab`, `shift+tab`) leaves it alone. Without
-`hold:`, the trigger key is swallowed — a `tab.md` without it disables Tab everywhere.
-An invalid `hold:` value is shown as an error in the HUD and holds for 200ms; `hold:` in
+`:hold:`, the trigger key is swallowed — a `tab.md` without it disables Tab everywhere.
+An invalid `:hold:` value is shown as an error in the HUD and holds for 200ms; `:hold:` in
 a modifier's file is an error, as modifiers keep their function anyway.
 
 ```markdown
-hold: 200ms
+:hold: 200ms
 ## k Kitty
 {shell(open -a kitty)|null}
 ```
 
-A `layout:` line before the first heading sets how the HUD arranges the entries. `layout: list`,
-the default, lists them top to bottom in columns of up to 12. `layout: rows` puts them left to
-right in rows, in file order; an entry whose content starts with a `row: break` line starts a
-new row (the line is not part of the content, and a `row:` line further down is). A row does
-not wrap, so the HUD is as wide as the widest row. Any other `layout:` value, a second
-`layout:` line, a `row:` value other than `break`, or `row:` without `layout: rows` is an
+A `:layout:` line before the first heading sets how the HUD arranges the entries. `:layout: list`,
+the default, lists them top to bottom in columns of up to 12. `:layout: rows` puts them left to
+right in rows, in file order; an entry whose content starts with a `:row: break` line starts a
+new row (the line is not part of the content, and a `:row:` line further down is). A row does
+not wrap, so the HUD is as wide as the widest row. Any other `:layout:` value, a second
+`:layout:` line, a `:row:` value other than `break`, or `:row:` without `:layout: rows` is an
 error shown in the HUD.
 
 ```markdown
-layout: rows
+:layout: rows
 ## 1 Chrome
 {shell(open -a "Google Chrome")|null}
 ## 2 Yab
 {shell(open -a "Yab")|null}
 ## q Moshi
-row: break
+:row: break
 {shell(open -a "Moshi")|null}
 ```
 
@@ -98,26 +98,26 @@ buttons). The left button is not supported. The format is the snippet format wit
 
 ```markdown
 ## left Back
-app: Google Chrome
-app: Safari
+:app: Google Chrome
+:app: Safari
 {key(cmd+[)}
 
 ## up Mission Control
 {shell(open -b com.apple.exposelauncher)|null}
 ```
 
-One or more `app:` lines (one per line) at the start of a gesture limit it to those apps,
+One or more `:app:` lines (one per line) at the start of a gesture limit it to those apps,
 by name as the Dock shows it or by bundle ID, matched exactly against the frontmost app.
-A comma is part of a name. A blank line ends the `app:` lines; a later `app:` line is
+A comma is part of a name. A blank line ends the `:app:` lines; a later `:app:` line is
 content. A gesture runs the first section of its direction that has the frontmost app in
-its `app:` lines, or else the first one without any. The content is expanded
+its `:app:` lines, or else the first one without any. The content is expanded
 like a leader entry's, with the same built-ins, and its result is handled the same way.
 
 The button's press is held back until its release, as it is not known before whether it
 is a click or a gesture. A click, or a gesture that no section takes, is then replayed,
 so a right click opens its context menu on release rather than on press. Only buttons
 with a file are watched; with no files, mouse events never reach burin. A file name that
-is no button, an unknown direction or an empty `app:` line is announced and counted as an
+is no button, an unknown direction or an empty `:app:` line is announced and counted as an
 error in the tray, and the whole file is skipped. The directory is watched, and the
 tray's Reload reloads it too.
 
@@ -132,29 +132,29 @@ disappear on release, and show while a leader is held too.
 After [Quitter for Mac](https://marco.org/apps): hide or quit an app, or close its
 windows, once it has not been the frontmost app for a while. Switching to an app resets its
 timer; background activity (sound, network, notifications) does not. Rules live in
-`~/.config/burin/quitter.md`, one `## ` section per app of `key: value` lines; other lines,
-and the text before the first heading, are comments. Any `word:` line inside a section is
-parsed as a key, so a comment must not take that form (an unknown key makes the section an
-error):
+`~/.config/burin/quitter.md`, one `## ` section per app of `:key: value` lines. Only lines
+of that form, with the key between two colons at the start of the line, are fields; every
+other line, such as `Note: ...`, and the text before the first heading, is a comment. An
+unknown `:key:` makes the section an error:
 
 ```markdown
 ## Slack
-after: 30m
-action: hide
+:after: 30m
+:action: hide
 
 ## Preview
-bundle: com.apple.Preview
-after: 10m
-action: quit
+:bundle: com.apple.Preview
+:after: 10m
+:action: quit
 
 ## Dev Chrome
-path: ~/Apps/Google Chrome Canary.app
-after: 2h
+:path: ~/Apps/Google Chrome Canary.app
+:after: 2h
 ```
 
-- `after:` (required) is how long the app may stay in the background, a Go duration
+- `:after:` (required) is how long the app may stay in the background, a Go duration
   (`90s`, `30m`, `1h`).
-- `action:` is `hide` (the default), `quit` or `close_window`. A hidden app is not hidden
+- `:action:` is `hide` (the default), `quit` or `close_window`. A hidden app is not hidden
   again. Quit is the normal Cmd-Q, never a force quit: an app with unsaved documents asks
   about them, and is asked again only after another full period. `close_window` closes the
   app's standard windows (minimized ones too) with their close buttons and leaves floating
@@ -163,16 +163,16 @@ after: 2h
   30-second check until the app is frontmost again, and needs Accessibility permission. A
   window with unsaved changes may ask about them.
 - The heading is matched exactly against the app's name as the Dock shows it. With a
-  `bundle:` line (the bundle identifier) or a `path:` line (the full path of the `.app`,
+  `:bundle:` line (the bundle identifier) or a `:path:` line (the full path of the `.app`,
   exact, `~` for the home directory) the heading is only a label. A section may have one of
-  `bundle:` and `path:`, not both; the first section matching an app is the one that runs.
+  `:bundle:` and `:path:`, not both; the first section matching an app is the one that runs.
 
 An app burin first sees, at startup or when launched, starts its period then; apps not
 running are left alone, and so is burin itself. The frontmost app is sampled every 2
 seconds, so a switch to an app shorter than about 2 seconds may be missed, but anything
 longer resets its timer. The running apps are checked against the rules every 30 seconds,
 so an app is hidden or quit up to 30 seconds after its period ends. A section with
-an unknown key, a missing or invalid `after:` or an invalid `action:` is skipped and
+an unknown key, a missing or invalid `:after:` or an invalid `:action:` is skipped and
 counted as an error in the tray; the other sections still load. The file is watched, and
 the tray's Reload rereads it too; a reload takes effect at the next 30-second check.
 

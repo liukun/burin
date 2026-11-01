@@ -83,7 +83,7 @@ var triggers = map[string]trigger{
 	"kp_divide":   {keycode: 75},
 	"kp_enter":    {keycode: 76},
 	"kp_clear":    {keycode: 71},
-	// Tab, usually with hold: in its file so a tap still types a Tab.
+	// Tab, usually with :hold: in its file so a tap still types a Tab.
 	"tab": {keycode: 48},
 }
 

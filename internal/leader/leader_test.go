@@ -383,8 +383,8 @@ func TestSetConfigsKeepsActiveHold(t *testing.T) {
 // Hold-mode leaders: a long delay where the timer must not fire during
 // the test, a short one where it must.
 const (
-	tabSlow = "hold: 1s\n## k Kitty\na\n"
-	tabFast = "hold: 30ms\n## k Kitty\na\n"
+	tabSlow = ":hold: 1s\n## k Kitty\na\n"
+	tabFast = ":hold: 30ms\n## k Kitty\na\n"
 )
 
 func TestHoldModeTapTypesTrigger(t *testing.T) {
@@ -565,7 +565,7 @@ func TestHoldModeRepeatAfterShortcutPasses(t *testing.T) {
 }
 
 func TestHoldModeWithErrorTapsAndShows(t *testing.T) {
-	l, rec := newLeader(t, map[string]string{"tab": "hold: soon\n## k Kitty\na\n"})
+	l, rec := newLeader(t, map[string]string{"tab": ":hold: soon\n## k Kitty\na\n"})
 	l.mu.Lock()
 	c := l.configs[0]
 	l.mu.Unlock()

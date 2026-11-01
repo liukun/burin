@@ -12,18 +12,18 @@ import (
 // exampleFile is the example of the plan, with comments around it.
 const exampleFile = `Slack 不在前台半小时就隐藏
 ## Slack
-after: 30m
-action: hide
+:after: 30m
+:action: hide
 
 ## Preview
-bundle: com.apple.Preview
-after: 10m
-action: quit
+:bundle: com.apple.Preview
+:after: 10m
+:action: quit
 
 ## Dev Chrome
 说明：全角冒号是注释
-path: ~/Apps/Google Chrome Canary.app
-after: 2h
+:path: ~/Apps/Google Chrome Canary.app
+:after: 2h
 `
 
 func TestParseExample(t *testing.T) {
@@ -46,7 +46,7 @@ func TestParseExample(t *testing.T) {
 }
 
 func TestParseCloseWindow(t *testing.T) {
-	set := Parse("## Hammerspoon\nbundle: org.hammerspoon.Hammerspoon\nafter: 10m\naction: close_window\n")
+	set := Parse("## Hammerspoon\n:bundle: org.hammerspoon.Hammerspoon\n:after: 10m\n:action: close_window\n")
 	if len(set.Errors) != 0 {
 		t.Fatalf("Errors = %+v, want none", set.Errors)
 	}
@@ -65,20 +65,21 @@ func TestParseSectionErrors(t *testing.T) {
 		section string
 		wantErr string
 	}{
-		{"缺 after", "action: quit\n", "after: is required"},
-		{"after 不是时长", "after: 30\n", `"30" is not a duration`},
-		{"after 为零", "after: 0s\n", `"0s" is not positive`},
-		{"action 拼错", "after: 1m\naction: close\n", `"close" is not hide, quit or close_window`},
-		{"未知 key", "after: 1m\nbundel: com.foo\n", `unknown key "bundel"`},
-		{"重复 key", "after: 1m\nafter: 2m\n", "duplicate after:"},
-		{"bundle 和 path 同时", "after: 1m\nbundle: com.foo\npath: /Applications/Foo.app\n", "bundle: and path: exclude each other"},
-		{"bundle 空", "after: 1m\nbundle:\n", "bundle: needs a bundle identifier"},
-		{"path 空", "after: 1m\npath:\n", "path: needs an app path"},
+		{"缺 after", ":action: quit\n", ":after: is required"},
+		{"旧写法 after: 不再是字段", "after: 30m\n", ":after: is required"},
+		{"after 不是时长", ":after: 30\n", `"30" is not a duration`},
+		{"after 为零", ":after: 0s\n", `"0s" is not positive`},
+		{"action 拼错", ":after: 1m\n:action: close\n", `"close" is not hide, quit or close_window`},
+		{"未知 key", ":after: 1m\n:bundel: com.foo\n", `unknown key "bundel"`},
+		{"重复 key", ":after: 1m\n:after: 2m\n", "duplicate :after:"},
+		{"bundle 和 path 同时", ":after: 1m\n:bundle: com.foo\n:path: /Applications/Foo.app\n", ":bundle: and :path: exclude each other"},
+		{"bundle 空", ":after: 1m\n:bundle:\n", ":bundle: needs a bundle identifier"},
+		{"path 空", ":after: 1m\n:path:\n", ":path: needs an app path"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// The bad section sits between two good ones, which still load.
-			data := "## Good\nafter: 1m\n\n## Bad\n" + tt.section + "\n## Also good\nafter: 1m\n"
+			data := "## Good\n:after: 1m\n\n## Bad\n" + tt.section + "\n## Also good\n:after: 1m\n"
 			set := Parse(data)
 			if len(set.Errors) != 1 {
 				t.Fatalf("Errors = %+v, want 1", set.Errors)
@@ -99,7 +100,7 @@ func TestParseSectionErrors(t *testing.T) {
 }
 
 func TestParsePathWithoutTilde(t *testing.T) {
-	set := Parse("## Foo\npath: /Applications/Foo.app\nafter: 1m\n")
+	set := Parse("## Foo\n:path: /Applications/Foo.app\n:after: 1m\n")
 	if len(set.Errors) != 0 {
 		t.Fatalf("Errors = %+v, want none", set.Errors)
 	}
@@ -118,7 +119,7 @@ func TestParsePathTrailingSlash(t *testing.T) {
 		{"~/Apps/Foo.app/", home + "/Apps/Foo.app"},
 	}
 	for _, tt := range tests {
-		set := Parse("## Foo\npath: " + tt.path + "\nafter: 1m\n")
+		set := Parse("## Foo\n:path: " + tt.path + "\n:after: 1m\n")
 		if len(set.Errors) != 0 {
 			t.Fatalf("path %q: Errors = %+v, want none", tt.path, set.Errors)
 		}
@@ -145,5 +146,16 @@ func TestLoad(t *testing.T) {
 	unreadable := Load(dir)
 	if len(unreadable.Errors) != 1 {
 		t.Fatalf("Load(dir) errors = %+v, want 1", unreadable.Errors)
+	}
+}
+
+func TestParseProseIsComment(t *testing.T) {
+	set := Parse("## Slack\n注意: 不要这样写\nTODO: 以后再调\n:after: 30m\n")
+	if len(set.Errors) != 0 {
+		t.Fatalf("Errors = %+v, want none", set.Errors)
+	}
+	want := []Rule{{Name: "Slack", Match: ByName, Value: "Slack", After: 30 * time.Minute}}
+	if !reflect.DeepEqual(set.Config.Rules, want) {
+		t.Fatalf("Rules = %+v, want %+v", set.Config.Rules, want)
 	}
 }

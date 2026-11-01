@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"burin/internal/field"
 	"burin/internal/snippet"
 )
 
@@ -22,10 +23,7 @@ type Set struct {
 	Errors []error
 }
 
-// keyLine is a "key: value" line of a section; other lines are comments.
-var keyLine = regexp.MustCompile(`^([A-Za-z_]+):\s*(.*)$`)
-
-// Section keys. A section with a margin: line is a margin rule.
+// Section keys. A section with a :margin: line is a margin rule.
 const (
 	keyScreenW        = "screen_w"
 	keyScreenH        = "screen_h"
@@ -68,11 +66,11 @@ func Load(path string) Set {
 }
 
 // Parse reads the rules of a window_rules.md file. Each "## " heading
-// starts a section of "key: value" lines; every other line, and the text
-// before the first heading, is a comment. A section with a margin: line
+// starts a section of ":key: value" lines; every other line, and the text
+// before the first heading, is a comment. A section with a :margin: line
 // is a MarginRule, any other a Rule for the app its heading names. An app
 // may have several sections; ActivePins picks the one that runs, so a
-// section without screen_w: and screen_h: after one with them is the
+// section without :screen_w: and :screen_h: after one with them is the
 // fallback when that display is unplugged. A section that fails to parse
 // is skipped and reported, the others still load.
 func Parse(data string) Set {
@@ -91,7 +89,7 @@ func Parse(data string) Set {
 }
 
 // addSection parses one section into a margin rule, when it has a
-// margin: key, or else a pin rule, and appends it to c.
+// :margin: key, or else a pin rule, and appends it to c.
 func (c *Config) addSection(sec snippet.Snippet) error {
 	values, err := sectionValues(sec.Content)
 	if err != nil {
@@ -113,23 +111,22 @@ func (c *Config) addSection(sec snippet.Snippet) error {
 	return nil
 }
 
-// sectionValues collects the key lines of a section. Only except: may
+// sectionValues collects the key lines of a section. Only :except: may
 // repeat.
 func sectionValues(content string) (map[string][]string, error) {
 	values := map[string][]string{}
 	for line := range strings.Lines(content) {
-		m := keyLine.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
+		key, value, ok := field.Parse(strings.TrimSpace(line))
+		if !ok {
 			continue
 		}
-		key, value := m[1], strings.TrimSpace(m[2])
 		known := pinKeys[key] || marginKeys[key]
 		if !known {
 			return nil, fmt.Errorf("unknown key %q", key)
 		}
 		_, seen := values[key]
 		if seen && key != keyExcept {
-			return nil, fmt.Errorf("duplicate %s:", key)
+			return nil, fmt.Errorf("duplicate :%s:", key)
 		}
 		values[key] = append(values[key], value)
 	}
@@ -140,7 +137,7 @@ func sectionValues(content string) (map[string][]string, error) {
 func checkKeys(values map[string][]string, allowed map[string]bool, kind string) error {
 	for key := range values {
 		if !allowed[key] {
-			return fmt.Errorf("%s: is not a key of a %s rule", key, kind)
+			return fmt.Errorf(":%s: is not a key of a %s rule", key, kind)
 		}
 	}
 	return nil
@@ -161,7 +158,7 @@ func parsePin(app string, values map[string][]string) (Rule, error) {
 	}
 	var ok bool
 	if rule.Anchor, ok = anchors[anchor]; !ok {
-		return Rule{}, fmt.Errorf("anchor: %q is not topLeft or bottomLeft", anchor)
+		return Rule{}, fmt.Errorf(":anchor: %q is not topLeft or bottomLeft", anchor)
 	}
 	if rule.Width, err = fractionRange(values, keyWidthMin, keyWidthMax); err != nil {
 		return Rule{}, err
@@ -177,7 +174,7 @@ func parsePin(app string, values map[string][]string) (Rule, error) {
 	}
 	if v, ok := values[keyFullScreenable]; ok {
 		if rule.FullScreenable, err = strconv.ParseBool(v[0]); err != nil {
-			return Rule{}, fmt.Errorf("fullScreenable: %q is not true or false", v[0])
+			return Rule{}, fmt.Errorf(":fullScreenable: %q is not true or false", v[0])
 		}
 	}
 	return rule, nil
@@ -192,19 +189,19 @@ func parseMargin(values map[string][]string) (MarginRule, error) {
 		return MarginRule{}, err
 	}
 	if screen == nil {
-		return MarginRule{}, errors.New("screen_w: and screen_h: are required")
+		return MarginRule{}, errors.New(":screen_w: and :screen_h: are required")
 	}
 	margin, err := number(values, keyMargin)
 	if err != nil {
 		return MarginRule{}, err
 	}
 	if margin < 0 {
-		return MarginRule{}, fmt.Errorf("margin: %g is negative", margin)
+		return MarginRule{}, fmt.Errorf(":margin: %g is negative", margin)
 	}
 	rule := MarginRule{Screen: *screen, Margin: margin}
 	for _, name := range values[keyExcept] {
 		if name == "" {
-			return MarginRule{}, errors.New("except: needs an app name")
+			return MarginRule{}, errors.New(":except: needs an app name")
 		}
 		rule.Except = append(rule.Except, name)
 	}
@@ -215,7 +212,7 @@ func parseMargin(values map[string][]string) (MarginRule, error) {
 func required(values map[string][]string, key string) (string, error) {
 	v, ok := values[key]
 	if !ok {
-		return "", fmt.Errorf("%s: is required", key)
+		return "", fmt.Errorf(":%s: is required", key)
 	}
 	return v[0], nil
 }
@@ -228,12 +225,12 @@ func number(values map[string][]string, key string) (float64, error) {
 	}
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		return 0, fmt.Errorf("%s: %q is not a number", key, s)
+		return 0, fmt.Errorf(":%s: %q is not a number", key, s)
 	}
 	return f, nil
 }
 
-// optionalScreen reads screen_w: and screen_h:, which come together or
+// optionalScreen reads :screen_w: and :screen_h:, which come together or
 // not at all.
 func optionalScreen(values map[string][]string) (*Size, error) {
 	_, hasW := values[keyScreenW]
@@ -242,7 +239,7 @@ func optionalScreen(values map[string][]string) (*Size, error) {
 		return nil, nil
 	}
 	if hasW != hasH {
-		return nil, errors.New("screen_w: and screen_h: go together")
+		return nil, errors.New(":screen_w: and :screen_h: go together")
 	}
 	w, err := number(values, keyScreenW)
 	if err != nil {
@@ -271,7 +268,7 @@ func fractionRange(values map[string][]string, minKey, maxKey string) (Range, er
 	}
 	valid := 0 <= lo && lo <= hi && hi <= 1
 	if !valid {
-		return Range{}, fmt.Errorf("%s: %g and %s: %g need 0 <= min <= max <= 1", minKey, lo, maxKey, hi)
+		return Range{}, fmt.Errorf(":%s: %g and :%s: %g need 0 <= min <= max <= 1", minKey, lo, maxKey, hi)
 	}
 	return Range{Min: lo, Max: hi}, nil
 }
@@ -284,7 +281,7 @@ func optionalRegexp(values map[string][]string, key string) (*regexp.Regexp, err
 	}
 	re, err := regexp.Compile(v[0])
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", key, err)
+		return nil, fmt.Errorf(":%s: %w", key, err)
 	}
 	return re, nil
 }

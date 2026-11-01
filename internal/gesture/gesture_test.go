@@ -157,16 +157,27 @@ func TestParseButton(t *testing.T) {
 }
 
 func TestParse(t *testing.T) {
-	rules, err := Parse("comment\n## left Back\napp: Google Chrome\napp: Safari\n{key(cmd+[)}\n\n## UP Mission Control\n{shell(open -b com.apple.exposelauncher)|null}\n## down\n\napp:com.apple.Safari\n\nx\napp: y\n## right\napp: Notes, Mail\napp: Pages\n\napp: Keynote\nz\n")
+	rules, err := Parse("comment\n## left Back\n:app: Google Chrome\n:app: Safari\n{key(cmd+[)}\n\n## UP Mission Control\n{shell(open -b com.apple.exposelauncher)|null}\n## down\n\n:app:com.apple.Safari\n\nx\n:app: y\n## right\n:app: Notes, Mail\n:app: Pages\n\n:app: Keynote\nz\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []Rule{
 		{Direction: Left, Title: "Back", Apps: []string{"Google Chrome", "Safari"}, Content: "{key(cmd+[)}"},
 		{Direction: Up, Title: "Mission Control", Content: "{shell(open -b com.apple.exposelauncher)|null}"},
-		{Direction: Down, Apps: []string{"com.apple.Safari"}, Content: "x\napp: y"},
-		{Direction: Right, Apps: []string{"Notes, Mail", "Pages"}, Content: "app: Keynote\nz"},
+		{Direction: Down, Apps: []string{"com.apple.Safari"}, Content: "x\n:app: y"},
+		{Direction: Right, Apps: []string{"Notes, Mail", "Pages"}, Content: ":app: Keynote\nz"},
 	}
+	if !reflect.DeepEqual(rules, want) {
+		t.Fatalf("rules = %+v, want %+v", rules, want)
+	}
+}
+
+func TestParseOldStyleApp(t *testing.T) {
+	rules, err := Parse("## left\napp: Safari\na\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Rule{{Direction: Left, Content: "app: Safari\na"}}
 	if !reflect.DeepEqual(rules, want) {
 		t.Fatalf("rules = %+v, want %+v", rules, want)
 	}
@@ -175,8 +186,8 @@ func TestParse(t *testing.T) {
 func TestParseErrors(t *testing.T) {
 	tests := map[string]string{
 		"unknown direction": "## north x\na\n",
-		"empty app":         "## left\napp:\na\n",
-		"empty second app":  "## left\napp: Safari\napp:  \na\n",
+		"empty app":         "## left\n:app:\na\n",
+		"empty second app":  "## left\n:app: Safari\n:app:  \na\n",
 		"empty heading":     "## \na\n",
 	}
 	for name, data := range tests {

@@ -90,7 +90,7 @@ func (r Rule) Name(b Button) string {
 	return b.String() + " " + string(r.Direction)
 }
 
-// matchesApp reports whether the rule's app: line lists app, by its name
+// matchesApp reports whether the rule's :app: lines list app, by its name
 // or its bundle ID.
 func (r Rule) matchesApp(app workspace.App) bool {
 	byName := app.Name != "" && slices.Contains(r.Apps, app.Name)
@@ -171,8 +171,8 @@ func (s *Set) AllErrors() []error {
 }
 
 // Match returns the rule for a gesture of button b in direction d over
-// app: the first rule of that direction whose app: line lists app, or
-// else the first one without an app: line.
+// app: the first rule of that direction whose :app: lines list app, or
+// else the first one without an :app: line.
 func (s *Set) Match(b Button, d Direction, app workspace.App) (Rule, bool) {
 	c, ok := s.config(b)
 	if !ok {

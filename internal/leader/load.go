@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode"
 
+	"burin/internal/field"
 	"burin/internal/snippet"
 )
 
@@ -21,7 +21,7 @@ type Entry struct {
 	Key     string
 	Title   string
 	Content string
-	// RowBreak is set by a "row: break" line at the start of the entry's
+	// RowBreak is set by a ":row: break" line at the start of the entry's
 	// content: in rows layout, the entry starts a new row.
 	RowBreak bool
 
@@ -40,30 +40,30 @@ const (
 	LayoutRows
 )
 
-// layouts maps the values of a layout: line to their Layout.
+// layouts maps the values of a :layout: line to their Layout.
 var layouts = map[string]Layout{"list": LayoutList, "rows": LayoutRows}
 
 // Preamble is what the lines before the first heading set.
 type Preamble struct {
 	// HoldDelay is how long the trigger must be held before the leader
-	// shows, set by a "hold:" line. Zero means the leader shows as soon
+	// shows, set by a ":hold:" line. Zero means the leader shows as soon
 	// as the trigger goes down. In hold mode a shorter tap types the
 	// trigger key as usual.
 	HoldDelay time.Duration
-	// Layout is set by a "layout:" line.
+	// Layout is set by a ":layout:" line.
 	Layout Layout
 }
 
-// DefaultHoldDelay is the hold delay of a file whose hold: line is
+// DefaultHoldDelay is the hold delay of a file whose :hold: line is
 // invalid: a typo must not make a tap of its trigger key do nothing.
 const DefaultHoldDelay = 200 * time.Millisecond
 
-// Directive lines, matched trimmed. holdLine and layoutLine are preamble
-// lines; rowLine starts an entry's content.
-var (
-	holdLine   = regexp.MustCompile(`^hold:\s*(.+)$`)
-	layoutLine = regexp.MustCompile(`^layout:\s*(.+)$`)
-	rowLine    = regexp.MustCompile(`^row:\s*(.+)$`)
+// Field keys, matched on trimmed lines. hold and layout are preamble
+// fields; row starts an entry's content.
+const (
+	keyHold   = "hold"
+	keyLayout = "layout"
+	keyRow    = "row"
 )
 
 // Config is one leader file: the trigger key it is named after and its
@@ -89,8 +89,8 @@ type Set struct {
 
 // Load reads the .md files directly in dir, in lexical order. Each file
 // is named after its trigger key (cmd_r.md) and holds "## <key> <title>"
-// headings in snippet format, with optional "hold: <duration>" and
-// "layout: list|rows" lines before the first heading. A missing dir is
+// headings in snippet format, with optional ":hold: <duration>" and
+// ":layout: list|rows" lines before the first heading. A missing dir is
 // empty.
 func Load(dir string) Set {
 	var s Set
@@ -149,7 +149,7 @@ func parseConfig(key string, t trigger, data string) Config {
 	// there is no tap to keep: the leader holds as usual.
 	if t.isModifier() && c.HoldDelay > 0 {
 		c.HoldDelay = 0
-		c.Err = errors.Join(c.Err, errors.New("hold: is only for ordinary trigger keys, not modifiers"))
+		c.Err = errors.Join(c.Err, errors.New(":hold: is only for ordinary trigger keys, not modifiers"))
 	}
 	if c.Err != nil {
 		return c
@@ -166,13 +166,13 @@ func parseConfig(key string, t trigger, data string) Config {
 }
 
 // Parse reads the entries of a leader file and its preamble: the hold
-// delay, zero without a hold: line, and the layout, LayoutList without a
-// layout: line. The entries are snippet.Parse with the heading split into
+// delay, zero without a :hold: line, and the layout, LayoutList without a
+// :layout: line. The entries are snippet.Parse with the heading split into
 // the entry's key, its first word, and its title, the rest, and a leading
-// "row: break" line taken out of the content into RowBreak. Keys are
+// ":row: break" line taken out of the content into RowBreak. Keys are
 // case-insensitive and must be unique.
 //
-// An invalid hold: or layout: line is an error, but the hold delay is
+// An invalid :hold: or :layout: line is an error, but the hold delay is
 // then DefaultHoldDelay, the layout LayoutList, and the entries are still
 // returned.
 func Parse(data string) ([]Entry, Preamble, error) {
@@ -184,41 +184,41 @@ func Parse(data string) ([]Entry, Preamble, error) {
 	if err != nil {
 		return nil, pre, errors.Join(err, preambleErr)
 	}
-	// With an invalid layout: line, the row: lines are likely meant for
+	// With an invalid :layout: line, the :row: lines are likely meant for
 	// rows layout: only that error is shown.
 	rowsAllowed := layout == LayoutRows || layoutErr != nil
 	for _, e := range entries {
 		if e.RowBreak && !rowsAllowed {
-			return nil, pre, errors.Join(fmt.Errorf("## %s: row: needs layout: rows", e.Key), preambleErr)
+			return nil, pre, errors.Join(fmt.Errorf("## %s: :row: needs :layout: rows", e.Key), preambleErr)
 		}
 	}
 	return entries, pre, preambleErr
 }
 
-// preambleValue returns the value of the preamble line that matches re,
-// named name, and whether there is one; more than one is an error. The
-// preamble is the lines before the first heading, which snippet.Parse
-// discards; lines that match no directive are a comment.
-func preambleValue(data string, re *regexp.Regexp, name string) (value string, ok bool, err error) {
+// preambleValue returns the value of the preamble field named key, and
+// whether there is one; more than one is an error. The preamble is the
+// lines before the first heading, which snippet.Parse discards; lines
+// that are not one of its fields are a comment.
+func preambleValue(data, key string) (value string, ok bool, err error) {
 	for line := range strings.Lines(strings.ReplaceAll(data, "\r\n", "\n")) {
 		if strings.HasPrefix(line, "## ") {
 			break
 		}
-		m := re.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
+		v, isField := field.Value(strings.TrimSpace(line), key)
+		if !isField {
 			continue
 		}
 		if ok {
-			return "", false, fmt.Errorf("duplicate %s: line", name)
+			return "", false, fmt.Errorf("duplicate :%s: line", key)
 		}
-		value, ok = m[1], true
+		value, ok = v, true
 	}
 	return value, ok, nil
 }
 
-// parseHold reads the hold: line of the preamble.
+// parseHold reads the :hold: line of the preamble.
 func parseHold(data string) (time.Duration, error) {
-	value, ok, err := preambleValue(data, holdLine, "hold")
+	value, ok, err := preambleValue(data, keyHold)
 	if err != nil {
 		return DefaultHoldDelay, err
 	}
@@ -227,17 +227,17 @@ func parseHold(data string) (time.Duration, error) {
 	}
 	d, err := time.ParseDuration(value)
 	if err != nil {
-		return DefaultHoldDelay, fmt.Errorf("hold: %w", err)
+		return DefaultHoldDelay, fmt.Errorf(":hold: %w", err)
 	}
 	if d <= 0 {
-		return DefaultHoldDelay, fmt.Errorf("hold: %s is not positive", value)
+		return DefaultHoldDelay, fmt.Errorf(":hold: %s is not positive", value)
 	}
 	return d, nil
 }
 
-// parseLayout reads the layout: line of the preamble.
+// parseLayout reads the :layout: line of the preamble.
 func parseLayout(data string) (Layout, error) {
-	value, ok, err := preambleValue(data, layoutLine, "layout")
+	value, ok, err := preambleValue(data, keyLayout)
 	if err != nil {
 		return LayoutList, err
 	}
@@ -246,7 +246,7 @@ func parseLayout(data string) (Layout, error) {
 	}
 	layout, known := layouts[value]
 	if !known {
-		return LayoutList, fmt.Errorf("layout: %q is not list or rows", value)
+		return LayoutList, fmt.Errorf(":layout: %q is not list or rows", value)
 	}
 	return layout, nil
 }
@@ -283,23 +283,23 @@ func parseEntries(data string) ([]Entry, error) {
 	return entries, nil
 }
 
-// parseRow reads the row: line that is the first non-blank line of an
+// parseRow reads the :row: line that is the first non-blank line of an
 // entry's content, and returns whether it breaks the row and the content
-// after it, from its next non-blank line. A row: line further down is
+// after it, from its next non-blank line. A :row: line further down is
 // content.
 func parseRow(content string) (rowBreak bool, rest string, err error) {
 	first, rest := cutLine(dropBlankLines(content))
-	m := rowLine.FindStringSubmatch(first)
-	if m == nil {
+	value, ok := field.Value(first, keyRow)
+	if !ok {
 		return false, content, nil
 	}
-	if m[1] != "break" {
-		return false, "", fmt.Errorf("row: %q is not break", m[1])
+	if value != "break" {
+		return false, "", fmt.Errorf(":row: %q is not break", value)
 	}
 	rest = dropBlankLines(rest)
 	next, _ := cutLine(rest)
-	if rowLine.MatchString(next) {
-		return false, "", errors.New("duplicate row: line")
+	if _, dup := field.Value(next, keyRow); dup {
+		return false, "", errors.New("duplicate :row: line")
 	}
 	return true, rest, nil
 }

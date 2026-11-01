@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"burin/internal/field"
 	"burin/internal/snippet"
 )
 
-// appLine is the app: line that may start a rule's content.
-var appLine = regexp.MustCompile(`^app:\s*(.*)$`)
+// keyApp is the field that may start a rule's content.
+const keyApp = "app"
 
 // errLeft rejects a file for the left button, whose clicks and drags
 // select and move things everywhere.
@@ -105,7 +105,7 @@ func loadFile(b Button, path string) Config {
 
 // Parse reads the rules of a mouse file: snippet.Parse with the heading
 // split into the direction, its first word, and the title, the rest. The
-// "app: <name>" lines at the start of the content, one app per line, limit
+// ":app: <name>" lines at the start of the content, one app per line, limit
 // the rule to those apps, by name or bundle ID; they are not part of the
 // content.
 func Parse(data string) ([]Rule, error) {
@@ -129,22 +129,21 @@ func Parse(data string) ([]Rule, error) {
 	return rules, nil
 }
 
-// parseApps reads the run of app: lines at the start of a rule's content,
-// one app per line, and returns the apps and the content after them. The
-// first line that is not an app: line, a blank one included, ends the run;
-// an app: line after it is content. Names are not split on commas, as a
-// comma can be part of an app's name.
+// parseApps reads the run of :app: lines at the start of a rule's
+// content, one app per line, and returns the apps and the content after
+// them. The first line that is not an :app: line, a blank one included,
+// ends the run; an :app: line after it is content. Names are not split
+// on commas, as a comma can be part of an app's name.
 func parseApps(content string) (apps []string, rest string, err error) {
 	rest = dropBlankLines(content)
 	for {
 		line, after := cutLine(rest)
-		m := appLine.FindStringSubmatch(line)
-		if m == nil {
+		name, ok := field.Value(line, keyApp)
+		if !ok {
 			break
 		}
-		name := m[1]
 		if name == "" {
-			return nil, "", errors.New("empty app: line")
+			return nil, "", errors.New("empty :app: line")
 		}
 		apps = append(apps, name)
 		rest = after

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"burin/internal/field"
 	"burin/internal/snippet"
 )
 
@@ -22,9 +22,6 @@ type Set struct {
 	// and a file that could not be read.
 	Errors []error
 }
-
-// keyLine is a "key: value" line of a section; other lines are comments.
-var keyLine = regexp.MustCompile(`^([A-Za-z_]+):\s*(.*)$`)
 
 // Section keys.
 const (
@@ -51,9 +48,9 @@ func Load(path string) Set {
 }
 
 // Parse reads the rules of a quitter.md file. Each "## " heading starts a
-// section of "key: value" lines; every other line, and the text before
+// section of ":key: value" lines; every other line, and the text before
 // the first heading, is a comment. A section matches the app its heading
-// names, or with a bundle: or path: line the app with that bundle
+// names, or with a :bundle: or :path: line the app with that bundle
 // identifier or bundle path, and the heading only labels it. A section
 // that fails to parse is skipped and reported, the others still load.
 func Parse(data string) Set {
@@ -78,16 +75,15 @@ func Parse(data string) Set {
 func sectionValues(content string) (map[string]string, error) {
 	values := map[string]string{}
 	for line := range strings.Lines(content) {
-		m := keyLine.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
+		key, value, ok := field.Parse(strings.TrimSpace(line))
+		if !ok {
 			continue
 		}
-		key, value := m[1], strings.TrimSpace(m[2])
 		if !knownKeys[key] {
 			return nil, fmt.Errorf("unknown key %q", key)
 		}
 		if _, seen := values[key]; seen {
-			return nil, fmt.Errorf("duplicate %s:", key)
+			return nil, fmt.Errorf("duplicate :%s:", key)
 		}
 		values[key] = value
 	}
@@ -105,35 +101,35 @@ func parseRule(sec snippet.Snippet) (Rule, error) {
 	}
 	after, ok := values[keyAfter]
 	if !ok {
-		return Rule{}, errors.New("after: is required")
+		return Rule{}, errors.New(":after: is required")
 	}
 	if rule.After, err = time.ParseDuration(after); err != nil {
-		return Rule{}, fmt.Errorf("after: %q is not a duration such as 30m", after)
+		return Rule{}, fmt.Errorf(":after: %q is not a duration such as 30m", after)
 	}
 	if rule.After <= 0 {
-		return Rule{}, fmt.Errorf("after: %q is not positive", after)
+		return Rule{}, fmt.Errorf(":after: %q is not positive", after)
 	}
 	action, ok := values[keyAction]
 	if !ok {
 		return rule, nil
 	}
 	if rule.Action, ok = actions[action]; !ok {
-		return Rule{}, fmt.Errorf("action: %q is not hide, quit or close_window", action)
+		return Rule{}, fmt.Errorf(":action: %q is not hide, quit or close_window", action)
 	}
 	return rule, nil
 }
 
-// parseMatch reads what a section matches: the bundle: or path: value
+// parseMatch reads what a section matches: the :bundle: or :path: value
 // when there is one, else the heading.
 func parseMatch(heading string, values map[string]string) (Match, string, error) {
 	bundle, hasBundle := values[keyBundle]
 	path, hasPath := values[keyPath]
 	if hasBundle && hasPath {
-		return 0, "", errors.New("bundle: and path: exclude each other")
+		return 0, "", errors.New(":bundle: and :path: exclude each other")
 	}
 	if hasBundle {
 		if bundle == "" {
-			return 0, "", errors.New("bundle: needs a bundle identifier")
+			return 0, "", errors.New(":bundle: needs a bundle identifier")
 		}
 		return ByBundle, bundle, nil
 	}
@@ -141,11 +137,11 @@ func parseMatch(heading string, values map[string]string) (Match, string, error)
 		return ByName, heading, nil
 	}
 	if path == "" {
-		return 0, "", errors.New("path: needs an app path")
+		return 0, "", errors.New(":path: needs an app path")
 	}
 	expanded, err := expandHome(path)
 	if err != nil {
-		return 0, "", fmt.Errorf("path: %w", err)
+		return 0, "", fmt.Errorf(":path: %w", err)
 	}
 	// Clean drops a trailing slash, which bundleURL.path has not.
 	return ByPath, filepath.Clean(expanded), nil

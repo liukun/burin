@@ -1,7 +1,7 @@
 {
   "name": "Burin",
   "identifier": "io.github.liukun.burin",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "out": "build",
   "macos": {
     "minimumSystemVersion": "13.0",

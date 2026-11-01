@@ -2,8 +2,11 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"burin/internal/gesture"
 	"burin/internal/leader"
@@ -220,6 +223,52 @@ func TestAppBuiltinsOnlyForLeaders(t *testing.T) {
 	for _, in := range []string{"{open()}", "{toggle(a,b)}", `{toggle("")}`} {
 		if _, errs := leaderEval.Expand(in); len(errs) != 1 {
 			t.Errorf("%s: %v", in, errs)
+		}
+	}
+}
+
+func TestEnsureAndOpen(t *testing.T) {
+	src := fstest.MapFS{"quitter.md": {Data: []byte("## Preview\n")}}
+	dir := filepath.Join(t.TempDir(), "burin")
+	var opened []string
+	open := func(path string) error {
+		opened = append(opened, path)
+		return nil
+	}
+	path := filepath.Join(dir, "quitter.md")
+
+	if err := ensureAndOpen(src, dir, "quitter.md", open); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "## Preview\n" {
+		t.Fatalf("missing file written as %q", data)
+	}
+
+	if err := os.WriteFile(path, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureAndOpen(src, dir, "quitter.md", open); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "mine" {
+		t.Fatalf("existing file changed to %q", data)
+	}
+	if len(opened) != 2 || opened[0] != dir || opened[1] != dir {
+		t.Fatalf("opened %v, want %s twice", opened, dir)
+	}
+}
+
+func TestTildePath(t *testing.T) {
+	tests := []struct{ path, home, want string }{
+		{"/Users/a/.config/burin", "/Users/a", "~/.config/burin"},
+		{"/Users/a", "/Users/a", "~"},
+		{"/Users/ab/x", "/Users/a", "/Users/ab/x"},
+		{"/tmp/x", "/Users/a", "/tmp/x"},
+		{"/tmp/x", "", "/tmp/x"},
+	}
+	for _, tt := range tests {
+		if got := tildePath(tt.path, tt.home); got != tt.want {
+			t.Errorf("tildePath(%q, %q) = %q, want %q", tt.path, tt.home, got, tt.want)
 		}
 	}
 }

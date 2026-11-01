@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"burin/internal/pasteboard"
 	"burin/internal/placeholder"
 	"burin/internal/quitter"
+	"burin/internal/seed"
 	"burin/internal/snippet"
 	"burin/internal/windowrules"
 	"burin/internal/workspace"
@@ -663,6 +665,60 @@ func folderItem(label, dir string) *mygo.MenuItem {
 	}}
 }
 
+// fileItem is a status line of the tray menu that opens dir, like
+// folderItem, for a rules file that sits directly in dir: a missing file
+// rel is written from src first, so there is a file to edit.
+func fileItem(label string, src fs.FS, dir, rel string) *mygo.MenuItem {
+	return &mygo.MenuItem{Label: label, Click: func(*mygo.MenuItem, *mygo.Window) {
+		if err := ensureAndOpen(src, dir, rel, mygo.Shell.OpenPath); err != nil {
+			log.Print(err)
+		}
+	}}
+}
+
+// ensureAndOpen writes the file rel of src into dir unless it exists, and
+// then opens dir with open. A failure to write is logged and dir still
+// opens; a failure to open is returned.
+func ensureAndOpen(src fs.FS, dir, rel string, open func(path string) error) error {
+	written, err := seed.SeedFile(src, dir, rel)
+	if err != nil {
+		log.Printf("seed %s: %v", rel, err)
+	}
+	if written {
+		log.Printf("wrote example %s", filepath.Join(dir, rel))
+	}
+	return open(dir)
+}
+
+// tildePath returns path with the home directory shortened to ~, as
+// notifications show it.
+func tildePath(path, home string) string {
+	rel, err := filepath.Rel(home, path)
+	isUnderHome := home != "" && err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+	if !isUnderHome {
+		return path
+	}
+	if rel == "." {
+		return "~"
+	}
+	return filepath.Join("~", rel)
+}
+
+// seedConfig writes the example config into dir when it is missing or
+// empty, and announces it.
+func seedConfig(dir string) {
+	written, err := seed.Seed(examples, dir)
+	if err != nil {
+		log.Printf("seed %s: %v", dir, err)
+	}
+	if len(written) == 0 {
+		return
+	}
+	log.Printf("wrote example config: %s", strings.Join(written, ", "))
+	home, _ := os.UserHomeDir()
+	notify("Burin", "Example config written to "+tildePath(dir, home))
+}
+
 // openAtLoginItem is the checkbox that registers the app as a login item.
 // A development build is a temporary bundle no login item should point
 // at, so the item is disabled there.
@@ -885,12 +941,13 @@ func main() {
 	b.hideGestureHUD = b.hideGestureCompass
 	b.status = folderItem("Loading snippets", b.snippetsDir)
 	b.leaderStatus = folderItem("Loading leaders", b.leadersDir)
-	b.rulesStatus = folderItem("Loading window rules", dir)
-	b.quitterStatus = folderItem("Loading quitter rules", dir)
+	b.rulesStatus = fileItem("Loading window rules", examples, dir, windowrules.FileName)
+	b.quitterStatus = fileItem("Loading quitter rules", examples, dir, quitter.FileName)
 	b.mouseStatus = folderItem("Loading mouse gestures", b.mouseDir)
 	leaderEval := b.newLeaderEvaluator(scriptsDir, loginPath)
 	b.leader = b.newLeader(leaderAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed))
 	b.runGesture = expandAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed)
+	seedConfig(dir)
 	for _, d := range []string{b.snippetsDir, b.leadersDir, b.mouseDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			log.Print(err)

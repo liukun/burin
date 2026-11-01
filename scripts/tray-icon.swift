@@ -3,12 +3,20 @@
 // curve from B's upper bowl onto the top of n, n's arch. Black on transparent,
 // for a template image macOS tints to match the menu bar.
 //
-// Usage: swift scripts/tray-icon.swift [out]   (default: resources/tray.png)
+// Usage: swift scripts/tray-icon.swift [out [pixels [style]]]
+//   out     where to write (default: resources/tray.png)
+//   pixels  square size (default: 36, 18 points of menu bar at 2x)
+//   style   "white": white mark on transparent, for the README's dark theme
+//           "app": white mark on the rounded gradient square of the app icon
+//             (swift scripts/tray-icon.swift resources/icon.png 1024 app)
 import AppKit
 
-let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "resources/tray.png"
-// 18 points, the menu bar icon height, at 2x.
-let pixels = 36
+let args = CommandLine.arguments
+let out = args.count > 1 ? args[1] : "resources/tray.png"
+let pixels = args.count > 2 ? Int(args[2])! : 36
+let style = args.count > 3 ? args[3] : "black"
+let app = style == "app"
+let white = app || style == "white"
 
 // The mark in a 100x100 unit square, y up.
 let weight: CGFloat = 11
@@ -54,8 +62,27 @@ let rep = NSBitmapImageRep(
     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
 let ctx = NSGraphicsContext(bitmapImageRep: rep)!.cgContext
 ctx.scaleBy(x: CGFloat(pixels) / 100, y: CGFloat(pixels) / 100)
+if app {
+    // The macOS icon grid: the square fills 824 of 1024 points, its
+    // corners rounded at 22.37% of its side, leaving room for the shadow
+    // the system draws.
+    let side: CGFloat = 100 * 824 / 1024
+    let square = CGRect(x: (100 - side) / 2, y: (100 - side) / 2, width: side, height: side)
+    ctx.addPath(CGPath(roundedRect: square, cornerWidth: side * 0.2237, cornerHeight: side * 0.2237, transform: nil))
+    ctx.clip()
+    let colors = [
+        CGColor(red: 0.26, green: 0.52, blue: 0.96, alpha: 1),
+        CGColor(red: 0.66, green: 0.33, blue: 0.97, alpha: 1),
+    ] as CFArray
+    let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
+    ctx.drawLinearGradient(gradient, start: CGPoint(x: square.minX, y: square.maxY), end: CGPoint(x: square.maxX, y: square.minY), options: [])
+    // The mark takes a bit over half of the square.
+    let markScale: CGFloat = 0.52
+    ctx.translateBy(x: 50 * (1 - markScale), y: 50 * (1 - markScale))
+    ctx.scaleBy(x: markScale, y: markScale)
+}
 ctx.translateBy(x: (100 - box.width) / 2 - box.minX, y: (100 - box.height) / 2 - box.minY)
-ctx.setFillColor(.black)
+ctx.setFillColor(white ? .white : .black)
 // One fill each: overlapping outlines filled together could cancel out.
 for s in shapes {
     ctx.addPath(s)

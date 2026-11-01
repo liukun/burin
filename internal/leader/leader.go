@@ -43,10 +43,6 @@ type Snapshot struct {
 	Err     error
 	Layout  Layout
 	Entries []EntryState
-	// Plain, when set, is shown instead of the rest: lines of plain text
-	// without keys or a header. The Leader never sets it; the mouse
-	// gestures share the HUD through it.
-	Plain []string
 }
 
 // Leader is the state machine of the leader keys. It sees every keyboard
@@ -496,13 +492,6 @@ func (l *Leader) changed() {
 	if l.OnChange != nil {
 		l.OnChange()
 	}
-}
-
-// Active reports whether a leader is held, without copying its state.
-func (l *Leader) Active() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.active != nil
 }
 
 // Snapshot returns the active leader and the status of its entries.

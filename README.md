@@ -121,10 +121,11 @@ is no button, an unknown direction or an empty `app:` line is announced and coun
 error in the tray, and the whole file is skipped. The directory is watched, and the
 tray's Reload reloads it too.
 
-While a button is held, a HUD at the top of the screen lists its gestures, one per line
-as an arrow and the title (the direction when the heading has no title): those for the
-frontmost app and those for every app, as a gesture would pick them. It disappears on
-release. A held leader keeps the HUD to itself.
+While a button is held, the titles of its gestures show around the pointer, each on the
+side of its direction (the direction itself when the heading has no title): those for the
+frontmost app and those for every app, as a gesture would pick them. They change color as
+the pointer slides towards them, and turn green once releasing runs the gesture. They
+disappear on release, and show while a leader is held too.
 
 ## Quitter
 

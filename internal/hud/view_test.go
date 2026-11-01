@@ -211,26 +211,3 @@ func TestRowsLayout(t *testing.T) {
 		}
 	}
 }
-
-func TestPlainLines(t *testing.T) {
-	s := leader.Snapshot{Active: true, Key: "cmd_r", Plain: []string{"← Back", "↑ Mission Control"}}
-	tt, size := tester(t, &s)
-	savePNG(t, tt, "plain")
-	texts := tt.Texts()
-	if !slices.Equal(texts, s.Plain) {
-		t.Fatalf("texts = %q, want only %q", texts, s.Plain)
-	}
-	tt.SetSize(int(math.Ceil(float64(size[0]))), int(math.Ceil(float64(size[1]))))
-	tt.Frame()
-	first, _ := tt.Find("← Back")
-	for _, text := range s.Plain {
-		r, ok := tt.Find(text)
-		fits := ok && r.X+r.W <= size[0] && r.Y+r.H <= size[1]
-		if !fits {
-			t.Errorf("%q at %+v does not fit %v", text, r, *size)
-		}
-	}
-	if second, _ := tt.Find("↑ Mission Control"); second.Y <= first.Y {
-		t.Errorf("lines not stacked: %+v %+v", first, second)
-	}
-}

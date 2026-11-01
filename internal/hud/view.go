@@ -47,11 +47,8 @@ const (
 func Build(c *ui.Context, s leader.Snapshot) (width, height float32) {
 	t := c.Theme()
 	c.Root().Background(ui.Transparent)
-	if len(s.Plain) > 0 {
-		return buildPlain(c, t, s.Plain)
-	}
 	m := measure(c, s)
-	panel(c, t, headerGap).Children(func() {
+	panel(c, t).Children(func() {
 		header(c, t, s, m)
 		switch {
 		case s.Err != nil:
@@ -63,26 +60,10 @@ func Build(c *ui.Context, s leader.Snapshot) (width, height float32) {
 	return m.width, m.height
 }
 
-// buildPlain builds the HUD of plain lines, one under the other in the
-// same box as the entries, and returns the content size it needs.
-func buildPlain(c *ui.Context, t *ui.Theme, lines []string) (width, height float32) {
-	var textW, lineH float32
-	for _, l := range lines {
-		w, h := c.MeasureText(0, ui.Span{Text: l, Size: fontSize})
-		textW, lineH = max(textW, w+slack), max(lineH, h)
-	}
-	panel(c, t, rowGap).Children(func() {
-		for i, l := range lines {
-			ui.Text(c.Key(i), l).FontSize(fontSize).Height(lineH).NoWrap()
-		}
-	})
-	n := float32(len(lines))
-	return 2*padding + textW, 2*padding + n*lineH + (n-1)*rowGap
-}
-
-// panel is the box the HUD's content goes in, its children gap apart.
-func panel(c *ui.Context, t *ui.Theme, gap float32) ui.Element {
-	box := ui.Column(c).Fill().Padding(padding).Gap(gap)
+// panel is the box the HUD's content goes in, its children headerGap
+// apart.
+func panel(c *ui.Context, t *ui.Theme) ui.Element {
+	box := ui.Column(c).Fill().Padding(padding).Gap(headerGap)
 	if !c.Vibrancy() {
 		box.Background(t.Surface).Radius(cornerRadius)
 	}

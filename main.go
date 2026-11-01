@@ -56,6 +56,7 @@ type burin struct {
 	leader          *leader.Leader
 	// hud is set once the tray exists; the tap may fire before.
 	hud           atomic.Pointer[hud.HUD]
+	compass       atomic.Pointer[hud.Compass]
 	status        *mygo.MenuItem
 	leaderStatus  *mygo.MenuItem
 	rulesStatus   *mygo.MenuItem
@@ -79,22 +80,18 @@ type burin struct {
 	io    eventIO
 	spawn func(fn func())
 
-	// The HUD lists the gestures of the held button. Its contents are
-	// worked out off the tap thread, as the frontmost app is asked on the
-	// main thread: hudGen counts the presses and releases, so a show that
-	// a later release or press made stale is dropped, and hudMu orders
-	// that check and the show with the hides.
+	// The compass shows the gestures of the held button around the
+	// press. Its contents are worked out off the tap thread, as the
+	// frontmost app is asked on the main thread: hudGen counts the
+	// presses and releases, so a show that a later release or press made
+	// stale is dropped, and hudMu orders that check and the show with the
+	// hides.
 	hudGen atomic.Uint64
 	hudMu  sync.Mutex
-	// showGestureHUD shows lines in the HUD, hideGestureHUD hides them
-	// and leaderHeld reports whether a leader holds the HUD. Tests stand
-	// in for them.
-	showGestureHUD func(lines []string)
+	// showGestureHUD shows the gestures by direction around the press at
+	// x, y, and hideGestureHUD hides them. Tests stand in for them.
+	showGestureHUD func(dirs hud.Directions, x, y float64)
 	hideGestureHUD func()
-	leaderHeld     func() bool
-	// gestureLines is what the HUD shows of the gestures, nil while it
-	// shows none.
-	gestureLines atomic.Pointer[[]string]
 
 	// tapMu guards the event tap, which is rebuilt when the mouse buttons
 	// to listen to change. tap is nil until listen succeeds; mouseMask is
@@ -361,7 +358,7 @@ func (b *burin) handleGesture(eventType uint32, event uintptr) bool {
 }
 
 // press starts tracking a press of button at x, y, keeps a copy of it to
-// replay and lists its gestures in the HUD. A press that cannot be copied
+// replay and shows its gestures in the compass. A press that cannot be copied
 // could not be replayed, so it is passed on and not tracked. b.gestureMu
 // is held.
 func (b *burin) press(button gesture.Button, event uintptr, x, y float64) bool {
@@ -371,40 +368,37 @@ func (b *burin) press(button gesture.Button, event uintptr, x, y float64) bool {
 	b.downCopy = b.io.copyEvent(event)
 	if b.downCopy == 0 {
 		b.recognizer.Reset()
-		// The HUD of an earlier press would stay up with no release to
-		// hide it.
+		// The compass of an earlier press would stay up with no release
+		// to hide it.
 		b.hideHUD()
 		return false
 	}
 	b.recognizer.Handle(gesture.Press, button, x, y)
-	b.showHUD(button)
+	b.showHUD(button, x, y)
 	return true
 }
 
-// showHUD lists the gestures of button over the frontmost app in the HUD,
-// on a goroutine: the tap thread must not wait for the main thread. The
-// HUD is left to a held leader.
-func (b *burin) showHUD(button gesture.Button) {
+// showHUD shows the gestures of button over the frontmost app in the
+// compass around the press at x, y, on a goroutine: the tap thread must
+// not wait for the main thread.
+func (b *burin) showHUD(button gesture.Button, x, y float64) {
 	gen := b.hudGen.Add(1)
 	set := b.gestures.Load()
 	b.spawn(func() {
-		var lines []string
-		if !b.leaderHeld() {
-			lines = gestureLines(set.Available(button, b.io.frontApp()))
-		}
+		dirs := gestureDirections(set.Available(button, b.io.frontApp()))
 		b.ifLatestHUD(gen, func() {
 			// With nothing to show, the gestures of an earlier press still
 			// go: its release's hide may have been dropped as stale.
-			if len(lines) == 0 {
+			if dirs.Empty() {
 				b.hideGestureHUD()
 				return
 			}
-			b.showGestureHUD(lines)
+			b.showGestureHUD(dirs, x, y)
 		})
 	})
 }
 
-// hideHUD hides the gestures in the HUD, on a goroutine like showHUD, and
+// hideHUD hides the compass, on a goroutine like showHUD, and
 // drops a show still on its way. A press since makes the hide stale: its
 // show, run first, must not be hidden.
 func (b *burin) hideHUD() {
@@ -423,59 +417,33 @@ func (b *burin) ifLatestHUD(gen uint64, fn func()) {
 	fn()
 }
 
-// gestureArrows are the HUD's marks of the directions.
-var gestureArrows = map[gesture.Direction]string{
-	gesture.Left:  "←",
-	gesture.Right: "→",
-	gesture.Up:    "↑",
-	gesture.Down:  "↓",
-}
-
-// gestureLines are the HUD lines of rules: an arrow and the title, or
-// the direction without one.
-func gestureLines(rules []gesture.Rule) []string {
-	lines := make([]string, 0, len(rules))
+// gestureDirections are the titles of rules by direction, a rule without
+// a title going by its direction. Available gives one rule per direction;
+// should a direction have more, the first wins.
+func gestureDirections(rules []gesture.Rule) hud.Directions {
+	var d hud.Directions
 	for _, r := range rules {
 		title := r.Title
 		if title == "" {
 			title = string(r.Direction)
 		}
-		lines = append(lines, gestureArrows[r.Direction]+" "+title)
+		d.Add(r.Direction, title)
 	}
-	return lines
+	return d
 }
 
-// showGestureLines is showGestureHUD of the running app.
-func (b *burin) showGestureLines(lines []string) {
-	b.gestureLines.Store(&lines)
-	if h := b.hud.Load(); h != nil {
-		h.Show()
+// showGestureCompass is showGestureHUD of the running app.
+func (b *burin) showGestureCompass(dirs hud.Directions, x, y float64) {
+	if c := b.compass.Load(); c != nil {
+		c.Show(dirs, x, y)
 	}
 }
 
-// hideGestureLines is hideGestureHUD of the running app. The HUD stays up
-// when it showed no gestures, or when a leader took it over since.
-func (b *burin) hideGestureLines() {
-	shown := b.gestureLines.Swap(nil) != nil
-	h := b.hud.Load()
-	keep := !shown || h == nil || b.leaderHeld()
-	if keep {
-		return
+// hideGestureCompass is hideGestureHUD of the running app.
+func (b *burin) hideGestureCompass() {
+	if c := b.compass.Load(); c != nil {
+		c.Hide()
 	}
-	h.Hide()
-}
-
-// hudSnapshot is what the HUD shows: the held leader, or else the
-// gestures of the held mouse button.
-func (b *burin) hudSnapshot() leader.Snapshot {
-	if s := b.leader.Snapshot(); s.Active {
-		return s
-	}
-	lines := b.gestureLines.Load()
-	if lines == nil {
-		return leader.Snapshot{}
-	}
-	return leader.Snapshot{Active: true, Plain: *lines}
 }
 
 // finishGesture runs the rule for a recognized gesture, or else replays
@@ -865,9 +833,8 @@ func main() {
 		spawn:           goSpawn,
 	}
 	b.startTap = b.startEventTap
-	b.showGestureHUD = b.showGestureLines
-	b.hideGestureHUD = b.hideGestureLines
-	b.leaderHeld = func() bool { return b.leader.Active() }
+	b.showGestureHUD = b.showGestureCompass
+	b.hideGestureHUD = b.hideGestureCompass
 	b.status = folderItem("Loading snippets", b.snippetsDir)
 	b.leaderStatus = folderItem("Loading leaders", b.leadersDir)
 	b.rulesStatus = folderItem("Loading window rules", dir)
@@ -961,9 +928,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		b.hud.Store(hud.New(tray, b.hudSnapshot))
+		b.hud.Store(hud.New(tray, b.leader.Snapshot))
+		b.compass.Store(hud.NewCompass(tray))
 	})
-	// The HUD flyout is the only window and is never closed, only hidden;
+	// The flyouts are the only windows and are never closed, only hidden;
 	// keep running regardless.
 	mygo.App.OnWindowAllClosed(func() {})
 	if err := mygo.App.Run(); err != nil {

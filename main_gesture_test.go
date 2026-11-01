@@ -2,11 +2,12 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"burin/internal/gesture"
+	"burin/internal/hud"
 	"burin/internal/keys"
 	"burin/internal/workspace"
 )
@@ -22,9 +23,7 @@ type fakeIO struct {
 	loc      map[uintptr][2]float64
 	failCopy map[uintptr]bool
 	front    workspace.App
-	// leaderHeld is whether a leader holds the HUD.
-	leaderHeld bool
-	hud        []string
+	hud      []string
 
 	next  uintptr
 	live  map[uintptr]uintptr // copy -> event it copies
@@ -80,12 +79,13 @@ func (f *fakeIO) eventIO() eventIO {
 	}
 }
 
-// hudFuncs sets b's gesture HUD to stand-ins: a show is recorded
-// as its lines joined by "|", a hide as "hide".
+// hudFuncs sets b's gesture compass to stand-ins: a show is recorded as
+// its directions and the press, a hide as "hide".
 func (f *fakeIO) hudFuncs(b *burin) {
-	b.showGestureHUD = func(lines []string) { f.hud = append(f.hud, strings.Join(lines, "|")) }
+	b.showGestureHUD = func(d hud.Directions, x, y float64) {
+		f.hud = append(f.hud, fmt.Sprintf("%+v@%v,%v", d, x, y))
+	}
 	b.hideGestureHUD = func() { f.hud = append(f.hud, "hide") }
-	b.leaderHeld = func() bool { return f.leaderHeld }
 }
 
 func (f *fakeIO) checkHUD(want ...string) {
@@ -326,23 +326,23 @@ func TestGestureReleaseCopyFails(t *testing.T) {
 }
 
 func TestGestureHUD(t *testing.T) {
-	// A click: the rules for every app are listed, then hidden.
+	// A click: the rules for every app show around the press, then hide.
 	b, f, _ := newGestureBurin(t)
 	f.front = workspace.App{Name: "Notes"}
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
-	f.checkHUD("← Back")
+	f.checkHUD("{Up: Down: Left:Back Right:}@500,500")
 	drag(b, f)
-	f.checkHUD("← Back")
+	f.checkHUD("{Up: Down: Left:Back Right:}@500,500")
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("← Back", "hide")
+	f.checkHUD("{Up: Down: Left:Back Right:}@500,500", "hide")
 
-	// A gesture over Safari also lists its rule, untitled.
+	// A gesture over Safari also shows its rule, untitled.
 	b, f, _ = newGestureBurin(t)
 	f.front = workspace.App{Name: "Safari"}
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
 	releaseBy(f, -50, 0)
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("← Back|↑ up", "hide")
+	f.checkHUD("{Up:up Down: Left:Back Right:}@500,500", "hide")
 
 	// A button without rules shows nothing: its press and release hide.
 	b, f, _ = newGestureBurin(t)
@@ -355,16 +355,7 @@ func TestGestureHUD(t *testing.T) {
 	f.failCopy[rightUp] = true
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("← Back", "hide")
-}
-
-func TestGestureHUDLeaderHeld(t *testing.T) {
-	b, f, _ := newGestureBurin(t)
-	f.leaderHeld = true
-	b.handleGesture(gesture.EventRightMouseDown, rightDown)
-	f.checkHUD("hide")
-	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("hide", "hide")
+	f.checkHUD("{Up: Down: Left:Back Right:}@500,500", "hide")
 }
 
 func TestGestureHUDStaleShow(t *testing.T) {
@@ -396,7 +387,7 @@ func TestGestureHUDStaleHide(t *testing.T) {
 	for _, fn := range pending[:last] {
 		fn()
 	}
-	f.checkHUD("← Back")
+	f.checkHUD("{Up: Down: Left:Back Right:}@500,500")
 }
 
 // fakeTap is a running tap whose Stop succeeds or not.
@@ -472,8 +463,8 @@ func TestSetMouseMaskRebuilds(t *testing.T) {
 	if b.downCopy != 0 {
 		t.Fatal("downCopy kept")
 	}
-	// The press showed no lines, as the button has no rules, and hid
-	// any; the rebuild hides the HUD all the same.
+	// The press showed no gestures, as the button has no rules, and hid
+	// any; the rebuild hides the compass all the same.
 	f.checkHUD("hide", "hide")
 	// The recognizer forgot the press: its release passes.
 	if b.handleGesture(gesture.EventRightMouseUp, rightUp) {
@@ -504,5 +495,26 @@ func TestSetMouseMaskStartFails(t *testing.T) {
 	b.setMouseMask(0x58)
 	if b.tap != nil || len(s.started) != 2 {
 		t.Fatalf("tap %+v, started %v", b.tap, s.started)
+	}
+}
+
+func TestGestureDirections(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rules []gesture.Rule
+		want  hud.Directions
+	}{
+		{"none", nil, hud.Directions{}},
+		{"untitled", []gesture.Rule{{Direction: gesture.Down}}, hud.Directions{Down: "down"}},
+		{"first wins", []gesture.Rule{
+			{Direction: gesture.Left, Title: "Back", Apps: []string{"Safari"}},
+			{Direction: gesture.Left, Title: "Previous"},
+			{Direction: gesture.Up, Title: "Mission Control"},
+			{Direction: gesture.Right},
+		}, hud.Directions{Up: "Mission Control", Left: "Back", Right: "right"}},
+	} {
+		if got := gestureDirections(tc.rules); got != tc.want {
+			t.Errorf("%s: gestureDirections = %+v, want %+v", tc.name, got, tc.want)
+		}
 	}
 }

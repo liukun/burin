@@ -1,5 +1,10 @@
 package leader
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Event types, the values of CGEventType.
 const (
 	EventKeyDown      = 10
@@ -95,4 +100,55 @@ var entryKeys = map[string]int64{
 	"j": 38, "'": 39, "k": 40, ";": 41, `\`: 42, ",": 43, "/": 44,
 	"n": 45, "m": 46, ".": 47, "`": 50,
 	"space": 49, "tab": 48, "return": 36,
+}
+
+// strokeKeys are keys that {key(...)} may press but that are not entry
+// keys: the arrows and the navigation keys, which entries leave alone.
+var strokeKeys = map[string]int64{
+	"left": 123, "right": 124, "down": 125, "up": 126,
+	"escape": 53, "delete": 51, "home": 115, "end": 119,
+	"pageup": 116, "pagedown": 121,
+}
+
+// strokeModifiers maps the modifier names of a stroke to their flags.
+var strokeModifiers = map[string]uint64{
+	"cmd":   flagCmd,
+	"ctrl":  flagCtrl,
+	"opt":   flagAlt,
+	"alt":   flagAlt,
+	"shift": flagShift,
+	"fn":    flagSecondaryFn,
+}
+
+// keycodeOf returns the virtual keycode of a key name: an entry key
+// (a-z, 0-9, ANSI punctuation, space, tab, return, f1-f20), an arrow
+// (left right up down), escape, delete, home, end, pageup or pagedown.
+// Names are lowercase.
+func keycodeOf(name string) (int64, bool) {
+	if keycode, ok := entryKeys[name]; ok {
+		return keycode, true
+	}
+	keycode, ok := strokeKeys[name]
+	return keycode, ok
+}
+
+// ParseStroke parses a key combination such as cmd+[, ctrl+up or
+// cmd+shift+t into the keycode of its last part and the flags of the
+// modifiers before it. Names are case-insensitive.
+func ParseStroke(spec string) (keycode int64, flags uint64, err error) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(spec)), "+")
+	name := strings.TrimSpace(parts[len(parts)-1])
+	keycode, ok := keycodeOf(name)
+	if !ok {
+		return 0, 0, fmt.Errorf("%q: unknown key %q", spec, name)
+	}
+	for _, p := range parts[:len(parts)-1] {
+		mod := strings.TrimSpace(p)
+		flag, ok := strokeModifiers[mod]
+		if !ok {
+			return 0, 0, fmt.Errorf("%q: unknown modifier %q", spec, mod)
+		}
+		flags |= flag
+	}
+	return keycode, flags, nil
 }

@@ -35,6 +35,7 @@ const (
 	keyboardEventKeycode = 9
 	eventSourceUserData  = 42
 	keyboardEventRepeat  = 8
+	mouseEventButton     = 3
 	unicodeBufSize       = 16
 )
 
@@ -63,7 +64,11 @@ var (
 	cgEventTapEnable                func(port uintptr, enable bool)
 	cgEventGetIntegerValueField     func(event uintptr, field uint32) int64
 	cgEventGetFlags                 func(event uintptr) uint64
+	cgEventGetLocation              func(event uintptr) cgPoint
 	cgEventKeyboardGetUnicodeString func(event uintptr, maxLen uintptr, actualLen *uintptr, buf *uint16)
+	cgEventCreateCopy               func(event uintptr) uintptr
+	cgEventSetIntegerValueField     func(event uintptr, field uint32, value int64)
+	cgEventPost                     func(tap uint32, event uintptr)
 	cfMachPortCreateRunLoopSource   func(alloc, port uintptr, order int) uintptr
 	cfMachPortInvalidate            func(port uintptr)
 	cfRunLoopGetCurrent             func() uintptr
@@ -118,7 +123,11 @@ func load() {
 		purego.RegisterLibFunc(&cgEventTapEnable, cg, "CGEventTapEnable")
 		purego.RegisterLibFunc(&cgEventGetIntegerValueField, cg, "CGEventGetIntegerValueField")
 		purego.RegisterLibFunc(&cgEventGetFlags, cg, "CGEventGetFlags")
+		purego.RegisterLibFunc(&cgEventGetLocation, cg, "CGEventGetLocation")
 		purego.RegisterLibFunc(&cgEventKeyboardGetUnicodeString, cg, "CGEventKeyboardGetUnicodeString")
+		purego.RegisterLibFunc(&cgEventCreateCopy, cg, "CGEventCreateCopy")
+		purego.RegisterLibFunc(&cgEventSetIntegerValueField, cg, "CGEventSetIntegerValueField")
+		purego.RegisterLibFunc(&cgEventPost, cg, "CGEventPost")
 		purego.RegisterLibFunc(&cfMachPortCreateRunLoopSource, cf, "CFMachPortCreateRunLoopSource")
 		purego.RegisterLibFunc(&cfMachPortInvalidate, cf, "CFMachPortInvalidate")
 		purego.RegisterLibFunc(&cfRunLoopGetCurrent, cf, "CFRunLoopGetCurrent")
@@ -229,24 +238,27 @@ func (t *Tap) run(mask uint64, ready chan<- error, done chan<- struct{}) {
 	cfRunLoopRun()
 }
 
-// Stop disables the tap, stops its run loop and releases it.
-func (t *Tap) Stop() {
+// Stop disables the tap, stops its run loop and releases it. It reports
+// whether the tap is stopped: false when its run loop did not stop in
+// time, and the tap may still run. A stopped tap may be started again.
+func (t *Tap) Stop() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.done == nil {
-		return
+		return true
 	}
 	cgEventTapEnable(t.port, false)
 	cfMachPortInvalidate(t.port)
 	if !t.waitStopped() {
 		log.Printf("eventtap: run loop did not stop within %v, giving up", stopTimeout)
-		return
+		return false
 	}
 	t.done = nil
 	t.unregister()
 	cfRelease(t.source)
 	cfRelease(t.port)
 	t.port, t.source, t.loop = 0, 0, 0
+	return true
 }
 
 // waitStopped stops the tap's run loop, retrying until the run loop thread
@@ -299,6 +311,54 @@ func UnicodeString(event uintptr) string {
 	cgEventKeyboardGetUnicodeString(event, unicodeBufSize, &n, &buf[0])
 	n = min(n, unicodeBufSize)
 	return string(utf16.Decode(buf[:n]))
+}
+
+// MouseButton returns the button number of a mouse event: 0 left, 1
+// right, 2 middle, 3 and on the side buttons.
+func MouseButton(event uintptr) int64 {
+	return cgEventGetIntegerValueField(event, mouseEventButton)
+}
+
+// cgPoint is CGPoint, which purego returns by value on darwin arm64.
+type cgPoint struct{ X, Y float64 }
+
+// Location returns where the pointer was at a mouse event, in global
+// display coordinates: the origin is the top left of the main display and
+// y grows downwards.
+func Location(event uintptr) (x, y float64) {
+	p := cgEventGetLocation(event)
+	return p.X, p.Y
+}
+
+// CopyEvent returns a copy of event that outlives the tap callback, or 0.
+// The caller releases it with ReleaseEvent, or hands it to PostMarked.
+func CopyEvent(event uintptr) uintptr {
+	load()
+	return cgEventCreateCopy(event)
+}
+
+// PostMarked posts events in order with their kCGEventSourceUserData set
+// to mark, and releases them. They are posted at the session tap, so the
+// taps of this process see them again and must pass events with mark on.
+// Zero events are skipped.
+func PostMarked(mark int64, events ...uintptr) {
+	load()
+	for _, ev := range events {
+		if ev == 0 {
+			continue
+		}
+		cgEventSetIntegerValueField(ev, eventSourceUserData, mark)
+		cgEventPost(sessionEventTap, ev)
+		cfRelease(ev)
+	}
+}
+
+// ReleaseEvent releases an event from CopyEvent. Zero is ignored.
+func ReleaseEvent(event uintptr) {
+	if event == 0 {
+		return
+	}
+	cfRelease(event)
 }
 
 // AccessibilityTrusted reports whether the process may tap keyboard events.

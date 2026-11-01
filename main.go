@@ -17,6 +17,7 @@ import (
 
 	"burin/internal/eventtap"
 	"burin/internal/expander"
+	"burin/internal/gesture"
 	"burin/internal/hud"
 	"burin/internal/keys"
 	"burin/internal/leader"
@@ -39,11 +40,12 @@ const (
 	maxCopiedPreview   = 40
 )
 
-// burin holds the running app's snippet, leader, window rule and quitter
-// state.
+// burin holds the running app's snippet, leader, mouse gesture, window
+// rule and quitter state.
 type burin struct {
 	snippetsDir string
 	leadersDir  string
+	mouseDir    string
 	// windowRulesFile and quitterFile sit directly in the config dir,
 	// outside snippets/ and leaders/, so neither of their loaders reads
 	// them.
@@ -60,6 +62,48 @@ type burin struct {
 	rules         windowrules.Engine
 	quitterStatus *mygo.MenuItem
 	quitter       quitter.Engine
+	mouseStatus   *mygo.MenuItem
+	// gestures is read by the tap on every mouse event and swapped on
+	// reload.
+	gestures atomic.Pointer[gesture.Set]
+	// runGesture runs the content of a gesture rule, named name.
+	runGesture func(name, content string) error
+
+	// gestureMu guards the press being tracked: the recognizer and the
+	// copy of the press, kept for a replay.
+	gestureMu  sync.Mutex
+	recognizer gesture.Recognizer
+	downCopy   uintptr
+	// io reads and posts events; spawn runs the end of a gesture off the
+	// tap thread. Both are stood in for by tests.
+	io    eventIO
+	spawn func(fn func())
+
+	// The HUD lists the gestures of the held button. Its contents are
+	// worked out off the tap thread, as the frontmost app is asked on the
+	// main thread: hudGen counts the presses and releases, so a show that
+	// a later release or press made stale is dropped, and hudMu orders
+	// that check and the show with the hides.
+	hudGen atomic.Uint64
+	hudMu  sync.Mutex
+	// showGestureHUD shows lines in the HUD, hideGestureHUD hides them
+	// and leaderHeld reports whether a leader holds the HUD. Tests stand
+	// in for them.
+	showGestureHUD func(lines []string)
+	hideGestureHUD func()
+	leaderHeld     func() bool
+	// gestureLines is what the HUD shows of the gestures, nil while it
+	// shows none.
+	gestureLines atomic.Pointer[[]string]
+
+	// tapMu guards the event tap, which is rebuilt when the mouse buttons
+	// to listen to change. tap is nil until listen succeeds; mouseMask is
+	// the mouse part of its mask.
+	tapMu     sync.Mutex
+	tap       stopper
+	mouseMask uint64
+	// startTap is startEventTap, or a stand-in in tests.
+	startTap func(mouseMask uint64) (stopper, error)
 
 	reloadMu sync.Mutex
 }
@@ -178,6 +222,12 @@ func leaderStatusText(set leader.Set) string {
 	return fmt.Sprintf("%d leaders, %d errors", len(set.Configs), failed)
 }
 
+// mouseStatusText counts the files that name no supported button and the
+// buttons whose file failed to load as errors.
+func mouseStatusText(set gesture.Set) string {
+	return fmt.Sprintf("%d mouse buttons, %d errors", len(set.Configs), len(set.AllErrors()))
+}
+
 func placeholderFailed(name string, errs []error) {
 	msg := errors.Join(errs...).Error()
 	log.Printf("placeholder in %q: %s", name, msg)
@@ -189,9 +239,19 @@ func placeholderFailed(name string, errs []error) {
 // results, as of {...|null}, do nothing more. Failures go to onError and
 // mark the entry failed.
 func leaderAction(ev *placeholder.Evaluator, copyText func(string) bool, notify func(title, body string), onError func(name string, errs []error)) func(leader.Config, leader.Entry) error {
+	run := expandAction(ev, copyText, notify, onError)
 	return func(c leader.Config, e leader.Entry) error {
-		name := entryName(c, e)
-		text, errs := ev.Expand(e.Content)
+		return run(entryName(c, e), e.Content)
+	}
+}
+
+// expandAction returns the action leader entries and mouse gestures
+// share: content is expanded with ev, and a non-empty result is copied
+// and announced under name. Empty results do nothing more. Failures go to
+// onError.
+func expandAction(ev *placeholder.Evaluator, copyText func(string) bool, notify func(title, body string), onError func(name string, errs []error)) func(name, content string) error {
+	return func(name, content string) error {
+		text, errs := ev.Expand(content)
 		if len(errs) > 0 {
 			onError(name, errs)
 			return errors.Join(errs...)
@@ -253,6 +313,223 @@ func (b *burin) handleLeader(eventType uint32, event uintptr) bool {
 	return b.leader.Handle(eventType, eventtap.Keycode(event), eventtap.Flags(event), repeat)
 }
 
+// handleGesture tracks the presses of the mouse buttons that have
+// gestures. A press is swallowed, since it is not known yet whether it is
+// a click or a gesture, and a copy of it kept; its drags are swallowed
+// too. On release, its location against the press's tells the gesture,
+// and the rest is left to finishGesture on a goroutine, as the tap must
+// return quickly. The mouse events that a replay posts come back marked
+// and pass.
+func (b *burin) handleGesture(eventType uint32, event uintptr) bool {
+	kind, isMouse := gesture.KindOf(eventType)
+	if !isMouse {
+		return false
+	}
+	if b.io.userData(event) == keys.SyntheticMark {
+		return false
+	}
+	button := gesture.Button(b.io.mouseButton(event))
+	untracked := kind == gesture.Press && !b.gestures.Load().Has(button)
+	if untracked {
+		return false
+	}
+	var x, y float64
+	if kind != gesture.Drag {
+		x, y = b.io.location(event)
+	}
+	b.gestureMu.Lock()
+	defer b.gestureMu.Unlock()
+	if kind == gesture.Press {
+		return b.press(button, event, x, y)
+	}
+	res := b.recognizer.Handle(kind, button, x, y)
+	if !res.Ended {
+		return res.Consume
+	}
+	b.hideHUD()
+	down := b.downCopy
+	b.downCopy = 0
+	up := b.io.copyEvent(event)
+	// Without a copy of the release, a replay would leave the button
+	// down in the app: the click is lost, but the release goes through.
+	if up == 0 {
+		b.io.releaseEvent(down)
+		return false
+	}
+	b.spawn(func() { b.finishGesture(button, res, down, up) })
+	return true
+}
+
+// press starts tracking a press of button at x, y, keeps a copy of it to
+// replay and lists its gestures in the HUD. A press that cannot be copied
+// could not be replayed, so it is passed on and not tracked. b.gestureMu
+// is held.
+func (b *burin) press(button gesture.Button, event uintptr, x, y float64) bool {
+	// A press of another button may still be tracked: the last one wins,
+	// and the earlier one is never replayed.
+	b.io.releaseEvent(b.downCopy)
+	b.downCopy = b.io.copyEvent(event)
+	if b.downCopy == 0 {
+		b.recognizer.Reset()
+		// The HUD of an earlier press would stay up with no release to
+		// hide it.
+		b.hideHUD()
+		return false
+	}
+	b.recognizer.Handle(gesture.Press, button, x, y)
+	b.showHUD(button)
+	return true
+}
+
+// showHUD lists the gestures of button over the frontmost app in the HUD,
+// on a goroutine: the tap thread must not wait for the main thread. The
+// HUD is left to a held leader.
+func (b *burin) showHUD(button gesture.Button) {
+	gen := b.hudGen.Add(1)
+	set := b.gestures.Load()
+	b.spawn(func() {
+		var lines []string
+		if !b.leaderHeld() {
+			lines = gestureLines(set.Available(button, b.io.frontApp()))
+		}
+		b.ifLatestHUD(gen, func() {
+			// With nothing to show, the gestures of an earlier press still
+			// go: its release's hide may have been dropped as stale.
+			if len(lines) == 0 {
+				b.hideGestureHUD()
+				return
+			}
+			b.showGestureHUD(lines)
+		})
+	})
+}
+
+// hideHUD hides the gestures in the HUD, on a goroutine like showHUD, and
+// drops a show still on its way. A press since makes the hide stale: its
+// show, run first, must not be hidden.
+func (b *burin) hideHUD() {
+	gen := b.hudGen.Add(1)
+	b.spawn(func() { b.ifLatestHUD(gen, b.hideGestureHUD) })
+}
+
+// ifLatestHUD runs fn under b.hudMu unless a press or release since gen
+// made it stale.
+func (b *burin) ifLatestHUD(gen uint64, fn func()) {
+	b.hudMu.Lock()
+	defer b.hudMu.Unlock()
+	if b.hudGen.Load() != gen {
+		return
+	}
+	fn()
+}
+
+// gestureArrows are the HUD's marks of the directions.
+var gestureArrows = map[gesture.Direction]string{
+	gesture.Left:  "←",
+	gesture.Right: "→",
+	gesture.Up:    "↑",
+	gesture.Down:  "↓",
+}
+
+// gestureLines are the HUD lines of rules: an arrow and the title, or
+// the direction without one.
+func gestureLines(rules []gesture.Rule) []string {
+	lines := make([]string, 0, len(rules))
+	for _, r := range rules {
+		title := r.Title
+		if title == "" {
+			title = string(r.Direction)
+		}
+		lines = append(lines, gestureArrows[r.Direction]+" "+title)
+	}
+	return lines
+}
+
+// showGestureLines is showGestureHUD of the running app.
+func (b *burin) showGestureLines(lines []string) {
+	b.gestureLines.Store(&lines)
+	if h := b.hud.Load(); h != nil {
+		h.Show()
+	}
+}
+
+// hideGestureLines is hideGestureHUD of the running app. The HUD stays up
+// when it showed no gestures, or when a leader took it over since.
+func (b *burin) hideGestureLines() {
+	shown := b.gestureLines.Swap(nil) != nil
+	h := b.hud.Load()
+	keep := !shown || h == nil || b.leaderHeld()
+	if keep {
+		return
+	}
+	h.Hide()
+}
+
+// hudSnapshot is what the HUD shows: the held leader, or else the
+// gestures of the held mouse button.
+func (b *burin) hudSnapshot() leader.Snapshot {
+	if s := b.leader.Snapshot(); s.Active {
+		return s
+	}
+	lines := b.gestureLines.Load()
+	if lines == nil {
+		return leader.Snapshot{}
+	}
+	return leader.Snapshot{Active: true, Plain: *lines}
+}
+
+// finishGesture runs the rule for a recognized gesture, or else replays
+// the swallowed press and release, so a click still opens the context
+// menu, on release. down and up are copies it posts or releases.
+func (b *burin) finishGesture(button gesture.Button, res gesture.Result, down, up uintptr) {
+	if res.Gesture && b.runGestureRule(button, res.Direction) {
+		b.io.releaseEvent(down)
+		b.io.releaseEvent(up)
+		return
+	}
+	b.io.postMarked(keys.SyntheticMark, down, up)
+}
+
+// runGestureRule runs the rule for a gesture of button in dir over the
+// frontmost app, and reports whether there was one.
+func (b *burin) runGestureRule(button gesture.Button, dir gesture.Direction) bool {
+	rule, ok := b.gestures.Load().Match(button, dir, b.io.frontApp())
+	if !ok {
+		return false
+	}
+	// Failures are already announced by the action.
+	_ = b.runGesture(rule.Name(button), rule.Content)
+	return true
+}
+
+// eventIO is what the gesture handling needs of the event tap and the
+// workspace, so that tests can stand in for them.
+type eventIO struct {
+	userData     func(event uintptr) int64
+	mouseButton  func(event uintptr) int64
+	location     func(event uintptr) (x, y float64)
+	copyEvent    func(event uintptr) uintptr
+	postMarked   func(mark int64, events ...uintptr)
+	releaseEvent func(event uintptr)
+	frontApp     func() workspace.App
+}
+
+// systemEventIO is the eventIO of the running app.
+func systemEventIO() eventIO {
+	return eventIO{
+		userData:     eventtap.UserData,
+		mouseButton:  eventtap.MouseButton,
+		location:     eventtap.Location,
+		copyEvent:    eventtap.CopyEvent,
+		postMarked:   eventtap.PostMarked,
+		releaseEvent: eventtap.ReleaseEvent,
+		frontApp:     workspace.FrontmostApp,
+	}
+}
+
+// goSpawn runs fn on a goroutine of its own.
+func goSpawn(fn func()) { go fn() }
+
 // handleExpander feeds keyDown events to the expander.
 func (b *burin) handleExpander(eventType uint32, event uintptr) bool {
 	if eventType != eventtap.EventKeyDown {
@@ -265,17 +542,83 @@ func (b *burin) handleExpander(eventType uint32, event uintptr) bool {
 	})
 }
 
-// listen starts the only event tap, which offers every key event to the
-// leader first and then to the expander.
-func (b *burin) listen() (*eventtap.Tap, error) {
-	mask := eventtap.MaskBit(eventtap.EventKeyDown) |
-		eventtap.MaskBit(eventtap.EventKeyUp) |
-		eventtap.MaskBit(eventtap.EventFlagsChanged)
+// keyMask is the part of the tap's mask that is always on.
+const keyMask = 1<<eventtap.EventKeyDown | 1<<eventtap.EventKeyUp | 1<<eventtap.EventFlagsChanged
+
+// stopper is a running event tap; Stop reports whether it stopped.
+type stopper interface {
+	Stop() bool
+}
+
+// startEventTap starts an event tap for the key events and the mouse
+// events of mouseMask, which offers every event to the gestures first,
+// then to the leader and then to the expander.
+func (b *burin) startEventTap(mouseMask uint64) (stopper, error) {
 	tap := &eventtap.Tap{}
-	if err := tap.Start(mask, chain(b.handleLeader, b.handleExpander)); err != nil {
+	if err := tap.Start(keyMask|mouseMask, chain(b.handleGesture, b.handleLeader, b.handleExpander)); err != nil {
 		return nil, err
 	}
 	return tap, nil
+}
+
+// listen starts the only event tap, with the mouse events of the gestures
+// loaded so far.
+func (b *burin) listen() error {
+	b.tapMu.Lock()
+	defer b.tapMu.Unlock()
+	tap, err := b.startTap(b.mouseMask)
+	if err != nil {
+		return err
+	}
+	b.tap = tap
+	return nil
+}
+
+// stopTap stops the event tap, if it runs.
+func (b *burin) stopTap() {
+	b.tapMu.Lock()
+	defer b.tapMu.Unlock()
+	if b.tap != nil {
+		b.tap.Stop()
+	}
+}
+
+// setMouseMask rebuilds the event tap when the mouse events to listen to
+// change, as a tap's mask is fixed when it starts. Before listen, or when
+// the tap could not start, the mask is only kept for listen.
+func (b *burin) setMouseMask(mask uint64) {
+	b.tapMu.Lock()
+	defer b.tapMu.Unlock()
+	if mask == b.mouseMask {
+		return
+	}
+	if b.tap == nil {
+		b.mouseMask = mask
+		return
+	}
+	if !b.tap.Stop() {
+		log.Print("event tap did not stop; mouse gestures keep the old buttons")
+		return
+	}
+	// Only the old tap saw the release of a press it tracked.
+	b.gestureMu.Lock()
+	b.recognizer.Reset()
+	b.io.releaseEvent(b.downCopy)
+	b.downCopy = 0
+	b.hideHUD()
+	b.gestureMu.Unlock()
+	tap, err := b.startTap(mask)
+	if err == nil {
+		b.tap, b.mouseMask = tap, mask
+		return
+	}
+	log.Printf("event tap: %v; restarting with the old mouse buttons", err)
+	if tap, err = b.startTap(b.mouseMask); err != nil {
+		log.Printf("event tap: %v", err)
+		b.tap = nil
+		return
+	}
+	b.tap = tap
 }
 
 // newLeader returns the leader state machine, wired to the HUD and to the
@@ -356,11 +699,12 @@ func notify(title, body string) {
 	}()
 }
 
-// reload rescans the snippets and leaders directories and rereads the
-// window rules and quitter rules.
+// reload rescans the snippets, leaders and mouse directories and rereads
+// the window rules and quitter rules.
 func (b *burin) reload() {
 	b.reloadSnippets()
 	b.reloadLeaders()
+	b.reloadMouse()
 	b.reloadWindowRules()
 	b.reloadQuitter()
 }
@@ -398,6 +742,24 @@ func (b *burin) reloadLeaders() {
 	b.leaderStatus.SetLabel(status)
 }
 
+// reloadMouse rescans the mouse directory, swaps the gesture rules and
+// rebuilds the tap when the buttons change. Errors are announced, as
+// there is no HUD to show them.
+func (b *burin) reloadMouse() {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+	set := gesture.Load(b.mouseDir)
+	b.gestures.Store(&set)
+	b.setMouseMask(set.Mask())
+	for _, err := range set.AllErrors() {
+		log.Printf("mouse: %v", err)
+		notify("Mouse gestures skipped", err.Error())
+	}
+	status := mouseStatusText(set)
+	log.Printf("loaded %s from %s", status, b.mouseDir)
+	b.mouseStatus.SetLabel(status)
+}
+
 // reloadWindowRules rereads the window rules file and hands its rules to
 // the engine. A missing file has no rules.
 func (b *burin) reloadWindowRules() {
@@ -428,8 +790,9 @@ func (b *burin) reloadQuitter() {
 	b.quitterStatus.SetLabel(status)
 }
 
-// newLeaderEvaluator is the evaluator of leader entries: the snippet
-// built-ins plus reload, open and toggle, which snippets do not get.
+// newLeaderEvaluator is the evaluator of leader entries and mouse
+// gestures: the snippet built-ins plus reload, open, toggle and key,
+// which snippets do not get.
 func (b *burin) newLeaderEvaluator(scriptsDir string, path func() string) *placeholder.Evaluator {
 	ev := newEvaluator(scriptsDir, path)
 	ev.Builtins["reload"] = func(args []string, _ string) (string, error) {
@@ -443,7 +806,22 @@ func (b *burin) newLeaderEvaluator(scriptsDir string, path func() string) *place
 	// open -a, and return nothing so an entry needs no |null.
 	ev.Builtins["open"] = appBuiltin(workspace.Open)
 	ev.Builtins["toggle"] = appBuiltin(workspace.Toggle)
+	ev.Builtins["key"] = keyBuiltin
 	return ev
+}
+
+// keyBuiltin presses a key combination such as cmd+[ or ctrl+up, its one
+// argument. The keys are marked, so the leader passes them on.
+func keyBuiltin(args []string, _ string) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("takes one argument, the keys such as cmd+[, got %d", len(args))
+	}
+	keycode, flags, err := leader.ParseStroke(args[0])
+	if err != nil {
+		return "", err
+	}
+	keys.Stroke(keycode, flags)
+	return "", nil
 }
 
 // appBuiltin makes a builtin of fn, which takes the app name as its one
@@ -478,18 +856,27 @@ func main() {
 	b := &burin{
 		snippetsDir:     filepath.Join(dir, "snippets"),
 		leadersDir:      filepath.Join(dir, "leaders"),
+		mouseDir:        filepath.Join(dir, "mouse"),
 		windowRulesFile: filepath.Join(dir, windowrules.FileName),
 		quitterFile:     filepath.Join(dir, quitter.FileName),
 		eval:            newEvaluator(scriptsDir, loginPath),
 		ex:              expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
+		io:              systemEventIO(),
+		spawn:           goSpawn,
 	}
+	b.startTap = b.startEventTap
+	b.showGestureHUD = b.showGestureLines
+	b.hideGestureHUD = b.hideGestureLines
+	b.leaderHeld = func() bool { return b.leader.Active() }
 	b.status = folderItem("Loading snippets", b.snippetsDir)
 	b.leaderStatus = folderItem("Loading leaders", b.leadersDir)
 	b.rulesStatus = folderItem("Loading window rules", dir)
 	b.quitterStatus = folderItem("Loading quitter rules", dir)
+	b.mouseStatus = folderItem("Loading mouse gestures", b.mouseDir)
 	leaderEval := b.newLeaderEvaluator(scriptsDir, loginPath)
 	b.leader = b.newLeader(leaderAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed))
-	for _, d := range []string{b.snippetsDir, b.leadersDir} {
+	b.runGesture = expandAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed)
+	for _, d := range []string{b.snippetsDir, b.leadersDir, b.mouseDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			log.Print(err)
 		}
@@ -501,6 +888,7 @@ func main() {
 		b.reload()
 		snippetsWatcher := watch(b.snippetsDir, b.reloadSnippets)
 		leadersWatcher := watch(b.leadersDir, b.reloadLeaders)
+		mouseWatcher := watch(b.mouseDir, b.reloadMouse)
 		// The watch is recursive and reports no file names, so any change
 		// under the config dir rereads the rules files, which is cheap.
 		rulesWatcher := watch(dir, func() {
@@ -518,25 +906,22 @@ func main() {
 		// Accessibility covers Input Monitoring, which an active tap
 		// could not run on alone.
 		trusted := eventtap.AccessibilityTrusted(false)
-		tap, err := b.listen()
-		if err != nil {
+		if err := b.listen(); err != nil {
 			log.Print(err)
 		}
 		mygo.App.OnQuit(func() {
 			b.ex.Stop()
 			b.rules.Stop()
 			b.quitter.Stop()
-			if tap != nil {
-				tap.Stop()
-			}
-			for _, w := range []*snippet.Watcher{snippetsWatcher, leadersWatcher, rulesWatcher} {
+			b.stopTap()
+			for _, w := range []*snippet.Watcher{snippetsWatcher, leadersWatcher, mouseWatcher, rulesWatcher} {
 				if w != nil {
 					w.Close()
 				}
 			}
 		})
 
-		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.rulesStatus, b.quitterStatus}
+		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.mouseStatus, b.rulesStatus, b.quitterStatus}
 		if !trusted {
 			items = append(items, &mygo.MenuItem{Label: grantAccessibility, Click: func(*mygo.MenuItem, *mygo.Window) {
 				// Granted meanwhile: the tap needs a fresh process to see it.
@@ -576,7 +961,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		b.hud.Store(hud.New(tray, b.leader.Snapshot))
+		b.hud.Store(hud.New(tray, b.hudSnapshot))
 	})
 	// The HUD flyout is the only window and is never closed, only hidden;
 	// keep running regardless.

@@ -129,6 +129,26 @@ func FrontmostPID() (pid int32, ok bool) {
 	return pid, ok
 }
 
+// FrontmostApp returns the name, bundle ID and pid of the frontmost app,
+// marked Active, or the zero App when there is none or the main thread
+// no longer runs.
+func FrontmostApp() App {
+	var app App
+	onMain(func() {
+		front := sharedWorkspace().Send(sel("frontmostApplication"))
+		if front == 0 {
+			return
+		}
+		app = App{
+			PID:      pidOf(front),
+			Name:     goString(front.Send(sel("localizedName"))),
+			BundleID: goString(front.Send(sel("bundleIdentifier"))),
+			Active:   true,
+		}
+	})
+	return app
+}
+
 // send sends the request of fn to the running app pid on the main thread.
 // It reports false when the app is gone or did not take the request at
 // once.

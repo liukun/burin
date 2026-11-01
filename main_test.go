@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"burin/internal/gesture"
 	"burin/internal/leader"
 	"burin/internal/placeholder"
 	"burin/internal/snippet"
@@ -52,6 +53,26 @@ func TestLeaderStatusText(t *testing.T) {
 	}
 	if got := leaderStatusText(set); got != "2 leaders, 2 errors" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMouseStatusText(t *testing.T) {
+	set := gesture.Set{
+		Configs: []gesture.Config{{Button: 1}, {Button: 3, Err: errors.New("parse")}},
+		Errors:  []error{errors.New("left button is not supported")},
+	}
+	if got := mouseStatusText(set); got != "2 mouse buttons, 2 errors" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// TestKeyBuiltinRejects covers the arguments that fail before any key is
+// posted.
+func TestKeyBuiltinRejects(t *testing.T) {
+	for _, args := range [][]string{nil, {"cmd+a", "x"}, {"cmd+nokey"}, {"super+a"}, {""}} {
+		if _, err := keyBuiltin(args, ""); err == nil {
+			t.Errorf("%q: no error", args)
+		}
 	}
 }
 

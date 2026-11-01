@@ -31,10 +31,14 @@ Entry keys are `a`–`z`, `0`–`9`, the ANSI punctuation keys, `space`, `tab`, 
 and `f1`…`f20`, matched by physical (ANSI) position. The content is expanded like a
 snippet's, with extra built-ins that snippets do not get:
 
-- `{reload}` reloads snippets and leaders.
+- `{reload}` reloads snippets, leaders, mouse gestures and the rules files.
 - `{open(App)}` brings the app to the front, launching it if it is not running.
 - `{toggle(App)}` hides the app if it is frontmost, brings it to the front if it is running
   or hidden, and launches it otherwise.
+- `{key(cmd+[)}` presses a key combination: modifiers `cmd ctrl opt` (or `alt`) `shift fn`
+  joined with `+` to one key name, case-insensitive. Key names are the entry keys below
+  plus `left right up down escape delete home end pageup pagedown`. A combination with a
+  comma must be quoted: `{key("cmd+,")}`.
 
 `App` is the app's name as the Dock shows it (`{toggle(Google Chrome)}`) or, for a running
 app, its bundle ID. A non-empty result is copied to the clipboard and announced; an empty
@@ -78,6 +82,49 @@ row: break
 Files that name no trigger key are skipped with a notification; a file that fails to
 parse shows its error in the HUD. With no leader files, trigger keys behave as usual.
 The directory is watched, and the tray's Reload reloads it too.
+
+## Mouse gestures
+
+Hold the right, middle or a side mouse button, drag in one direction and release to run
+an action: back in the browser with a drag to the left, Mission Control with a drag up.
+A drag of at least 30 pixels whose horizontal or vertical part is at least 70% of it is a
+gesture `left`, `right`, `up` or `down`; anything else is a click.
+
+Each file in `~/.config/burin/mouse/` is one button, named after it: `right.md`,
+`middle.md`, or `buttonN.md` with N the button number macOS reports (`button3.md`,
+`button4.md` for the side buttons; `button1.md` and `button2.md` are the right and middle
+buttons). The left button is not supported. The format is the snippet format with
+`## <direction> <title>` headings; text before the first heading is a comment:
+
+```markdown
+## left Back
+app: Google Chrome
+app: Safari
+{key(cmd+[)}
+
+## up Mission Control
+{shell(open -b com.apple.exposelauncher)|null}
+```
+
+One or more `app:` lines (one per line) at the start of a gesture limit it to those apps,
+by name as the Dock shows it or by bundle ID, matched exactly against the frontmost app.
+A comma is part of a name. A blank line ends the `app:` lines; a later `app:` line is
+content. A gesture runs the first section of its direction that has the frontmost app in
+its `app:` lines, or else the first one without any. The content is expanded
+like a leader entry's, with the same built-ins, and its result is handled the same way.
+
+The button's press is held back until its release, as it is not known before whether it
+is a click or a gesture. A click, or a gesture that no section takes, is then replayed,
+so a right click opens its context menu on release rather than on press. Only buttons
+with a file are watched; with no files, mouse events never reach burin. A file name that
+is no button, an unknown direction or an empty `app:` line is announced and counted as an
+error in the tray, and the whole file is skipped. The directory is watched, and the
+tray's Reload reloads it too.
+
+While a button is held, a HUD at the top of the screen lists its gestures, one per line
+as an arrow and the title (the direction when the heading has no title): those for the
+frontmost app and those for every app, as a gesture would pick them. It disappears on
+release. A held leader keeps the HUD to itself.
 
 ## Quitter
 
@@ -172,6 +219,7 @@ never registered.
 - `unwrap` matches `\s` and `\d` as ASCII only.
 - The snippet watcher is the hand-written fsnotify one kept from earlier, not `mygo.WatchFiles`.
 - Leader entry keys are keycodes of the ANSI layout; on other layouts they follow the key's position, not its label.
+- A mouse gesture holds back the drag events of its button too; with two gesture buttons down at once, only the one pressed last is tracked.
 - Holding a modifier trigger swallows its combinations too: with `cmd_r.md` present, right Cmd+Tab does nothing.
 
 ## License

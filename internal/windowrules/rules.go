@@ -5,9 +5,9 @@
 // few seconds; Accessibility is only asked about apps whose windows
 // changed, and only to move windows.
 //
-// rules.go, plan.go and load.go are plain Go so their tests run on any
-// platform; the CoreGraphics and Accessibility calls live in the darwin
-// files.
+// rules.go, plan.go, load.go and missioncontrol.go are plain Go so their
+// tests run on any platform; the CoreGraphics and Accessibility calls live
+// in the darwin files.
 package windowrules
 
 import (

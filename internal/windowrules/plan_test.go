@@ -497,3 +497,33 @@ func TestMoveString(t *testing.T) {
 		t.Fatalf("String = %q, want %q", got, want)
 	}
 }
+
+// A margin move sets only the position unless the window has to narrow;
+// a pin move always sets the size.
+func TestPlanPositionOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		w    CGWindow
+		want Move
+	}{
+		{"左边距不超右缘只设位置", at(kitty, Rect{0, 100, 442, 333}),
+			Move{To: Rect{66, 100, 442, 333}, Margin: true, PositionOnly: true}},
+		{"左边距超出右缘要缩宽", at(kitty, Rect{0, 100, 1920, 600}),
+			Move{To: Rect{66, 100, 1854, 600}, Margin: true}},
+		{"pin 设大小", at(slackMain, Rect{200, 30, 1500, 800}),
+			Move{To: slackMainAt}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			moves, _, _ := Plan(testConfig, []CGWindow{tt.w}, desk, nil, &fakeInspector{infos: testInfos})
+			if len(moves) != 1 {
+				t.Fatalf("moves = %+v, want one", moves)
+			}
+			got := moves[0]
+			sameMove := got.To == tt.want.To && got.Margin == tt.want.Margin && got.PositionOnly == tt.want.PositionOnly
+			if !sameMove {
+				t.Fatalf("move = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

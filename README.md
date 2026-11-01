@@ -175,6 +175,12 @@ an unknown key, a missing or invalid `after:` or an invalid `action:` is skipped
 counted as an error in the tray; the other sections still load. The file is watched, and
 the tray's Reload rereads it too; a reload takes effect at the next 30-second check.
 
+## Window rules
+
+Rules live in `~/.config/burin/window_rules.md`. While Mission Control is up, a round is
+skipped entirely. The left margin rule only moves a window; it narrows the window only
+when it would otherwise cross the right edge of the screen.
+
 ## Development
 
 Requires Go 1.27+.

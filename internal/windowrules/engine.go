@@ -122,17 +122,24 @@ func (e *Engine) round(cache Cache, idle *int) Cache {
 	if e.hold.holding(start) {
 		return cache
 	}
-	windows, err := listWindows()
+	ds := displays()
+	windows, missionControl, err := listWindows(ds)
 	if err != nil {
 		log.Printf("windowrules: %v", err)
 		return cache
 	}
+	// Mission Control reports thumbnails as window bounds: a round now
+	// would move and shrink windows that are in place.
+	if missionControl {
+		log.Printf("windowrules: Mission Control is up, round skipped")
+		return cache
+	}
 	session := newAXSession()
 	defer session.close()
-	moves, next, stats := Plan(cfg, windows, displays(), cache, session)
+	moves, next, stats := Plan(cfg, windows, ds, cache, session)
 	for _, m := range moves {
 		log.Printf("windowrules: %s", m)
-		if err := session.setFrame(m.Window, m.To); err != nil {
+		if err := session.setFrame(m.Window, m.To, m.PositionOnly); err != nil {
 			log.Printf("windowrules: move %s window %d: %v", m.Window.Owner, m.Window.ID, err)
 		}
 	}

@@ -242,21 +242,24 @@ func elementInfo(el uintptr) Info {
 	}
 }
 
-// setFrame moves and resizes w. Position goes first, then size, then the
-// position is read back and set again if the app moved the window while
-// resizing it, as some do to keep it on screen.
-func (s *axSession) setFrame(w CGWindow, to Rect) error {
+// setFrame moves and resizes w, or only moves it when positionOnly, so a
+// window keeps whatever size it has. Position goes first, then size, then
+// the position is read back and set again if the app moved the window
+// while resizing it, as some do to keep it on screen.
+func (s *axSession) setFrame(w CGWindow, to Rect, positionOnly bool) error {
 	el, err := s.element(w)
 	if err != nil {
 		return err
 	}
 	pos := cgPoint{X: to.X, Y: to.Y}
-	size := cgSize{W: to.W, H: to.H}
 	if err := setValue(el, attrPosition, axValueCGPoint, unsafe.Pointer(&pos)); err != nil {
 		return err
 	}
-	if err := setValue(el, attrSize, axValueCGSize, unsafe.Pointer(&size)); err != nil {
-		return err
+	if !positionOnly {
+		size := cgSize{W: to.W, H: to.H}
+		if err := setValue(el, attrSize, axValueCGSize, unsafe.Pointer(&size)); err != nil {
+			return err
+		}
 	}
 	got, ok := elementFrame(el)
 	positionKept := ok && near(got.X, to.X) && near(got.Y, to.Y)

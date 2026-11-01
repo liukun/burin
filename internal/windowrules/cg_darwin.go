@@ -22,6 +22,10 @@ const (
 	cfStringEncodingUTF8  = 0x08000100
 	cfStringInitialBuffer = 256
 
+	// procNameBuffer holds a process name from proc_name, which copies at
+	// most 2*MAXCOMLEN (32) bytes.
+	procNameBuffer = 64
+
 	// normalWindowLayer is the layer of app windows; menus, the Dock and
 	// status items sit above it.
 	normalWindowLayer = 0
@@ -39,6 +43,7 @@ var (
 	cfStringGetCString                     func(str uintptr, buf *byte, size int, encoding uint32) bool
 	cfStringCreateWithCString              func(alloc uintptr, cstr *byte, encoding uint32) uintptr
 	cfRelease                              func(obj uintptr)
+	procName                               func(pid int32, buf *byte, size uint32) int32
 
 	kCGWindowOwnerPID  uintptr
 	kCGWindowOwnerName uintptr
@@ -79,6 +84,7 @@ func load() {
 		cf := mustDlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
 		cg := mustDlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
 		as := mustDlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+		libSystem := mustDlopen("/usr/lib/libSystem.B.dylib")
 		purego.RegisterLibFunc(&cgWindowListCopyWindowInfo, cg, "CGWindowListCopyWindowInfo")
 		purego.RegisterLibFunc(&cgRectMakeWithDictionaryRepresentation, cg, "CGRectMakeWithDictionaryRepresentation")
 		purego.RegisterLibFunc(&cfArrayGetCount, cf, "CFArrayGetCount")
@@ -90,6 +96,7 @@ func load() {
 		purego.RegisterLibFunc(&cfStringGetCString, cf, "CFStringGetCString")
 		purego.RegisterLibFunc(&cfStringCreateWithCString, cf, "CFStringCreateWithCString")
 		purego.RegisterLibFunc(&cfRelease, cf, "CFRelease")
+		purego.RegisterLibFunc(&procName, libSystem, "proc_name")
 		kCGWindowOwnerPID = globalValue(cg, "kCGWindowOwnerPID")
 		kCGWindowOwnerName = globalValue(cg, "kCGWindowOwnerName")
 		kCGWindowBounds = globalValue(cg, "kCGWindowBounds")
@@ -136,39 +143,79 @@ func cfNumberInt64(num uintptr) (int64, bool) {
 	return v, ok
 }
 
+// processName returns the name of the process pid, not localized, or ""
+// when it cannot be read.
+func processName(pid int32) string {
+	buf := make([]byte, procNameBuffer)
+	n := procName(pid, &buf[0], uint32(len(buf)))
+	if n <= 0 {
+		return ""
+	}
+	return string(buf[:n])
+}
+
 // listWindows returns the on-screen windows of the normal layer, front to
-// back, in the current Space. kCGWindowName is not read: it needs the
-// Screen Recording permission, and titles come from Accessibility.
-func listWindows() ([]CGWindow, error) {
+// back, in the current Space, and whether Mission Control is up, told by
+// the Dock's backdrop windows over displays (see isMissionControlWindow).
+// kCGWindowName is not read: it needs the Screen Recording permission,
+// and titles come from Accessibility.
+func listWindows(displays []Display) (windows []CGWindow, missionControl bool, err error) {
 	load()
 	arr := cgWindowListCopyWindowInfo(cgWindowListOptionOnScreenOnly|cgWindowListExcludeDesktopElements, cgNullWindowID)
 	if arr == 0 {
-		return nil, errors.New("CGWindowListCopyWindowInfo returned NULL")
+		return nil, false, errors.New("CGWindowListCopyWindowInfo returned NULL")
 	}
 	defer cfRelease(arr)
 	n := cfArrayGetCount(arr)
-	out := make([]CGWindow, 0, n)
+	windows = make([]CGWindow, 0, n)
 	for i := range n {
-		w, ok := windowFromDict(cfArrayGetValueAtIndex(arr, i))
-		if ok {
-			out = append(out, w)
+		dict := cfArrayGetValueAtIndex(arr, i)
+		layer, hasLayer := cfNumberInt64(cfDictionaryGetValue(dict, kCGWindowLayer))
+		if !hasLayer {
+			continue
+		}
+		if layer != normalWindowLayer {
+			missionControl = missionControl || isBackdrop(dict, layer, displays)
+			continue
+		}
+		if w, ok := windowFromDict(dict); ok {
+			windows = append(windows, w)
 		}
 	}
-	return out, nil
+	return windows, missionControl, nil
 }
 
-// windowFromDict reads one window dictionary of the list; ok is false for
-// windows outside the normal layer and for incomplete entries.
-func windowFromDict(dict uintptr) (CGWindow, bool) {
-	layer, hasLayer := cfNumberInt64(cfDictionaryGetValue(dict, kCGWindowLayer))
-	if !hasLayer || layer != normalWindowLayer {
-		return CGWindow{}, false
+// isBackdrop reports whether the window of dict, at layer, is one of the
+// Dock's Mission Control backdrops.
+func isBackdrop(dict uintptr, layer int64, displays []Display) bool {
+	r, hasBounds := boundsOf(dict)
+	if !hasBounds {
+		return false
 	}
+	process := func() string {
+		pid, hasPID := cfNumberInt64(cfDictionaryGetValue(dict, kCGWindowOwnerPID))
+		if !hasPID {
+			return ""
+		}
+		return processName(int32(pid))
+	}
+	return isMissionControlWindow(layer, r, displays, process)
+}
+
+// boundsOf reads kCGWindowBounds of a window dictionary.
+func boundsOf(dict uintptr) (Rect, bool) {
+	var r Rect
+	boundsDict := cfDictionaryGetValue(dict, kCGWindowBounds)
+	ok := boundsDict != 0 && cgRectMakeWithDictionaryRepresentation(boundsDict, &r)
+	return r, ok
+}
+
+// windowFromDict reads one window dictionary of the normal layer; ok is
+// false for incomplete entries.
+func windowFromDict(dict uintptr) (CGWindow, bool) {
 	id, hasID := cfNumberInt64(cfDictionaryGetValue(dict, kCGWindowNumber))
 	pid, hasPID := cfNumberInt64(cfDictionaryGetValue(dict, kCGWindowOwnerPID))
-	boundsDict := cfDictionaryGetValue(dict, kCGWindowBounds)
-	var r Rect
-	hasBounds := boundsDict != 0 && cgRectMakeWithDictionaryRepresentation(boundsDict, &r)
+	r, hasBounds := boundsOf(dict)
 	if !hasID || !hasPID || !hasBounds {
 		return CGWindow{}, false
 	}

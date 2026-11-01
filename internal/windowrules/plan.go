@@ -36,6 +36,12 @@ type Move struct {
 	Title string
 	// Margin is set when a margin rule, not a pin rule, moves the window.
 	Margin bool
+	// PositionOnly is set when the window keeps its size and only its
+	// position is set. A margin move keeps the size unless the window has
+	// to narrow to stay clear of the right edge: setting the size it was
+	// listed with would otherwise freeze a passing size, such as a
+	// Mission Control thumbnail's, into the window.
+	PositionOnly bool
 }
 
 // String describes the move for the log, after the Lua module's lines.
@@ -205,8 +211,8 @@ func (p *planner) info(w CGWindow) Info {
 	return info
 }
 
-func (p *planner) move(w CGWindow, to Rect, title string, margin bool) {
-	p.moves = append(p.moves, Move{Window: w, To: to, Title: title, Margin: margin})
+func (p *planner) move(w CGWindow, to Rect, title string, margin, positionOnly bool) {
+	p.moves = append(p.moves, Move{Window: w, To: to, Title: title, Margin: margin, PositionOnly: positionOnly})
 	p.frames[w.ID] = to
 }
 
@@ -245,7 +251,7 @@ func (p *planner) pin(rule Rule, windows []CGWindow) {
 		if SameRect(frame, target) {
 			continue
 		}
-		p.move(w.CG, target, w.Info.Title, false)
+		p.move(w.CG, target, w.Info.Title, false, false)
 	}
 }
 
@@ -314,6 +320,8 @@ func (p *planner) margin(rule MarginRule, windows []CGWindow) {
 		if !info.Normal() {
 			continue
 		}
-		p.move(w, target, info.Title, true)
+		// LeftMarginFrame keeps the width exactly unless it narrows.
+		keepsSize := target.W == frame.W && target.H == frame.H
+		p.move(w, target, info.Title, true, keepsSize)
 	}
 }

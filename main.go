@@ -16,6 +16,7 @@ import (
 
 	"github.com/egoist/mygo"
 
+	"burin/internal/activity"
 	"burin/internal/eventtap"
 	"burin/internal/expander"
 	"burin/internal/gesture"
@@ -112,6 +113,14 @@ type burin struct {
 	startTap func(mouseMask uint64) (stopper, error)
 
 	reloadMu sync.Mutex
+
+	// activity tracks the time worked without a break, set once the app
+	// is ready.
+	activity *activity.Tracker
+	// workNotice is the last rest reminder, closed as the next one shows;
+	// workNoticeMu guards it.
+	workNoticeMu sync.Mutex
+	workNotice   *mygo.Notification
 }
 
 // logFile is where the log is kept besides stderr, which a login item
@@ -757,6 +766,106 @@ func notify(title, body string) {
 	}()
 }
 
+// idleApps are the apps whose use does not end a rest: chatting is not
+// working.
+var idleApps = map[string]bool{
+	"微信":     true,
+	"WeChat": true,
+	"Slack":  true,
+}
+
+// workNoticeLifetime is how long a rest reminder stays before it is
+// withdrawn.
+const workNoticeLifetime = 10 * time.Second
+
+// startActivity starts tracking the time worked without a break and
+// shows it in a bar on every display. Its state is kept in the user data
+// dir, not the config dir, whose watch would reload the rules on every
+// save.
+func (b *burin) startActivity() {
+	now := time.Now()
+	t := activity.NewTracker(now)
+	save := func(activity.State) {}
+	if store := activityStore(); store != nil {
+		st, ok, err := store.Load()
+		switch {
+		case err != nil:
+			log.Printf("activity: %v", err)
+		case ok:
+			t.Restore(st, now)
+		}
+		save = func(st activity.State) {
+			if err := store.Save(st); err != nil {
+				log.Printf("activity: %v", err)
+			}
+		}
+		t.Persist = save
+	}
+	t.OnWorkLimit = b.remindRest
+	b.activity = t
+	activity.NewBar(t)
+
+	sleep := func() { t.Sleep(time.Now()) }
+	wake := func() { t.Wake(time.Now()) }
+	mygo.Power.OnSuspend(sleep)
+	mygo.Power.OnLockScreen(sleep)
+	mygo.Power.OnResume(wake)
+	mygo.Power.OnUnlockScreen(wake)
+
+	ticker := time.NewTicker(activity.PollInterval)
+	go func() {
+		for now := range ticker.C {
+			// Both run on the main thread; the front app matters only while
+			// the user is at the keyboard.
+			systemIdle := mygo.Power.IdleTime()
+			inputRecent := systemIdle < activity.ActivityWindow
+			frontIdle := inputRecent && idleApps[workspace.FrontmostApp().Name]
+			t.Tick(now, systemIdle, frontIdle)
+		}
+	}()
+	mygo.App.OnQuit(func() {
+		ticker.Stop()
+		save(t.State(time.Now()))
+	})
+}
+
+// activityStore is the store of the activity state in the user data dir,
+// or nil, leaving the state unsaved, when that dir is unknown.
+func activityStore() *activity.Store {
+	dir, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil {
+		log.Printf("activity: state not kept: %v", err)
+		return nil
+	}
+	return activity.NewStore(filepath.Join(dir, activity.StateFileName))
+}
+
+// remindRest shows the rest reminder of an active period that has run for
+// elapsed, replacing the last one. Clicking it starts a rest: mygo
+// notifications have no action buttons.
+func (b *burin) remindRest(elapsed time.Duration) {
+	n := mygo.NewNotification(mygo.NotificationOptions{
+		Title: "休息提醒 - 已工作 " + activity.FormatDuration(elapsed),
+		Body:  "起来活动一下吧！",
+	})
+	n.OnClick(func() { b.activity.Rest(time.Now()) })
+	b.workNoticeMu.Lock()
+	last := b.workNotice
+	b.workNotice = n
+	b.workNoticeMu.Unlock()
+	if last != nil {
+		last.Close()
+	}
+	// Show waits for the user's permission on first use.
+	go func() {
+		if err := n.Show(); err != nil {
+			log.Printf("notification %q: %v", "rest reminder", err)
+			return
+		}
+		b.after(workNoticeLifetime, n.Close)
+	}()
+}
+
 // reload rescans the snippets, leaders and mouse directories and rereads
 // the window rules and quitter rules.
 func (b *burin) reload() {
@@ -1035,6 +1144,7 @@ func main() {
 		}
 		b.hud.Store(hud.New(tray, b.leader.Snapshot))
 		b.compass.Store(hud.NewCompass(tray))
+		b.startActivity()
 	})
 	// The flyouts are the only windows and are never closed, only hidden;
 	// keep running regardless.

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"burin/internal/activity"
+	"burin/internal/badge"
 	"burin/internal/gesture"
 	"burin/internal/leader"
 	"burin/internal/quitter"
@@ -68,6 +70,18 @@ func TestExamplesLoad(t *testing.T) {
 	rules := windowrules.Load(filepath.Join(dir, windowrules.FileName))
 	if len(rules.Errors) != 0 || rules.Config.Len() != 0 {
 		t.Errorf("window rules: %d rules, errors %v", rules.Config.Len(), rules.Errors)
+	}
+
+	// The examples are the built-in defaults, written out; only the
+	// idle apps differ, as WeChat's English name is a default too.
+	timer := activity.Load(filepath.Join(dir, activity.FileName))
+	if len(timer.Errors) != 0 || timer.Defaulted || timer.Config != activity.DefaultConfig || len(timer.IdleApps) != 2 || !timer.Enabled {
+		t.Errorf("timer: %+v", timer)
+	}
+
+	badges := badge.Load(filepath.Join(dir, badge.FileName))
+	if len(badges.Errors) != 0 || badges.Defaulted || len(badges.Apps) != len(badge.DefaultApps) || !badges.Enabled {
+		t.Errorf("badges: %+v", badges)
 	}
 }
 

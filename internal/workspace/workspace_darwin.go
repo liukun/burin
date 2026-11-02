@@ -234,23 +234,32 @@ const launchTimeout = 10 * time.Second
 // Management blocks with a "prevented from modifying apps" notification
 // on every first launch. open is Apple's and exempt.
 func Launch(name string) error {
-	apps, err := installedApps()
+	path, err := installedPath(name)
 	if err != nil {
 		return err
 	}
-	for _, app := range apps {
-		if !strings.EqualFold(app.Name, name) {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), launchTimeout)
-		defer cancel()
-		out, err := exec.CommandContext(ctx, "/usr/bin/open", "-a", app.Path).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("open %s: %w: %s", app.Path, err, strings.TrimSpace(string(out)))
-		}
-		return nil
+	ctx, cancel := context.WithTimeout(context.Background(), launchTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/usr/bin/open", "-a", path).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("open %s: %w: %s", path, err, strings.TrimSpace(string(out)))
 	}
-	return fmt.Errorf("no app named %q", name)
+	return nil
+}
+
+// installedPath returns the bundle path of the installed app whose name
+// is name, ignoring case.
+func installedPath(name string) (string, error) {
+	apps, err := installedApps()
+	if err != nil {
+		return "", err
+	}
+	for _, app := range apps {
+		if strings.EqualFold(app.Name, name) {
+			return app.Path, nil
+		}
+	}
+	return "", fmt.Errorf("no app named %q", name)
 }
 
 // Toggle hides app name when it is frontmost, activates it when it runs
@@ -287,4 +296,17 @@ func Open(name string) error {
 	// Asynchronous like Toggle's: NO is no error.
 	Activate(app.PID)
 	return nil
+}
+
+// AppPath returns the bundle path of app name: the running app's, as Open
+// finds it, else the installed app's, as Launch finds it.
+func AppPath(name string) (string, error) {
+	apps, ok := RunningApps()
+	if !ok {
+		return "", errNoMainThread
+	}
+	if app, running := find(apps, name); running && app.Path != "" {
+		return app.Path, nil
+	}
+	return installedPath(name)
 }

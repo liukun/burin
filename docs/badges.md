@@ -1,0 +1,38 @@
+# Badges
+
+The Dock badges of chosen apps, shown in the bar at the top center of every display, to the
+right of the [timer](timer.md): each app with a badge shows its icon and the badge's text,
+`•` for a badge without a count. Click one to bring the app to the front. Apps without a
+badge take no room, and the bar widens and stays centered as badges come and go.
+
+The apps are listed in `~/.config/burin/badges.md`, one `## ` section per app, in the
+order the bar shows them, after an optional switch before the first heading:
+
+```markdown
+:enabled: yes
+
+## Slack
+## WhatsApp
+## Telegram
+
+## Chat
+:bundle: com.example.chat
+```
+
+- `:enabled:` turns the badges on or off: `yes` or `true` (the default), `no` or `false`.
+  While they are off no badge icons show and the Dock is not read; with the
+  [timer](timer.md) off too, the bar is not shown at all.
+- The heading is matched exactly against the app's name as the Dock shows it (hover its
+  icon in the Dock to see it).
+- With a `:bundle:` line (the bundle identifier) the heading is only a label, and the
+  badge is the one of the running app with that identifier.
+
+Without a `badges.md`, Slack, WhatsApp, Telegram and 微信 are shown. A file that is there
+but has no sections shows none. A section with an unknown key is skipped, and an `:enabled:`
+other than `yes`, `no`, `true` or `false` leaves the badges on; both are counted as errors in
+the tray, which shows `Badges off` while the badges are off. The file is watched, and the tray's Reload rereads it too; a change
+shows at the next read.
+
+The badges are read from the Dock through Accessibility every 2 seconds, so they need
+Accessibility permission, which burin asks for anyway, and appear up to 2 seconds after
+the Dock shows them.

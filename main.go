@@ -17,6 +17,8 @@ import (
 	"github.com/egoist/mygo"
 
 	"burin/internal/activity"
+	"burin/internal/badge"
+	"burin/internal/bar"
 	"burin/internal/eventtap"
 	"burin/internal/expander"
 	"burin/internal/gesture"
@@ -44,16 +46,18 @@ const (
 )
 
 // burin holds the running app's snippet, leader, mouse gesture, window
-// rule and quitter state.
+// rule, quitter, timer and badge state.
 type burin struct {
 	snippetsDir string
 	leadersDir  string
 	mouseDir    string
-	// windowRulesFile and quitterFile sit directly in the config dir,
-	// outside snippets/ and leaders/, so neither of their loaders reads
-	// them.
+	// windowRulesFile, quitterFile, timerFile and badgesFile sit directly
+	// in the config dir, outside snippets/ and leaders/, so neither of
+	// their loaders reads them.
 	windowRulesFile string
 	quitterFile     string
+	timerFile       string
+	badgesFile      string
 	eval            *placeholder.Evaluator
 	ex              *expander.Expander
 	leader          *leader.Leader
@@ -115,8 +119,19 @@ type burin struct {
 	reloadMu sync.Mutex
 
 	// activity tracks the time worked without a break, set once the app
-	// is ready.
-	activity *activity.Tracker
+	// is ready under b.reloadMu, which also guards timerConfig, the
+	// thresholds of the last timer.md read, and timerDisabled, whether it
+	// turned the timer off.
+	activity      *activity.Tracker
+	timerConfig   activity.Config
+	timerDisabled bool
+	timerStatus   *mygo.MenuItem
+	// idleApps are the apps whose use does not end a break, read on
+	// every tick and swapped on reload.
+	idleApps atomic.Pointer[activity.Apps]
+	// badges watches the Dock badges of the apps of badges.md.
+	badges       *badge.Watcher
+	badgesStatus *mygo.MenuItem
 	// workNotice is the last rest reminder, closed as the next one shows;
 	// workNoticeMu guards it.
 	workNoticeMu sync.Mutex
@@ -210,19 +225,55 @@ func expanderSnippets(tbl snippet.Table, ev *placeholder.Evaluator, onError func
 }
 
 func statusText(tbl snippet.Table) string {
-	return fmt.Sprintf("%d snippets, %d errors", len(tbl.Snippets), len(tbl.Errors))
+	return fmt.Sprintf("%d snippets, %s", len(tbl.Snippets), errorsText(len(tbl.Errors)))
 }
 
 // windowRulesStatusText counts the rules that loaded and the sections
 // that did not.
 func windowRulesStatusText(set windowrules.Set) string {
-	return fmt.Sprintf("%d window rules, %d errors", set.Config.Len(), len(set.Errors))
+	return fmt.Sprintf("%d window rules, %s", set.Config.Len(), errorsText(len(set.Errors)))
 }
 
 // quitterStatusText counts the rules that loaded and the sections that
 // did not.
 func quitterStatusText(set quitter.Set) string {
-	return fmt.Sprintf("%d quitter rules, %d errors", set.Config.Len(), len(set.Errors))
+	return fmt.Sprintf("%d quitter rules, %s", set.Config.Len(), errorsText(len(set.Errors)))
+}
+
+// timerStatusText shows the timer's thresholds, its apps that count as a
+// break and the values and sections that did not load.
+func timerStatusText(s activity.Settings) string {
+	if !s.Enabled {
+		return offStatusText("Timer off", len(s.Errors))
+	}
+	return fmt.Sprintf("Timer %s idle, %s work, %d break apps, %s",
+		activity.FormatDuration(s.Config.Idle), activity.FormatDuration(s.Config.Work), len(s.IdleApps), errorsText(len(s.Errors)))
+}
+
+// badgesStatusText counts the apps whose badges show and the sections
+// that did not load.
+func badgesStatusText(set badge.Set) string {
+	if !set.Enabled {
+		return offStatusText("Badges off", len(set.Errors))
+	}
+	return fmt.Sprintf("%d badge apps, %s", len(set.Apps), errorsText(len(set.Errors)))
+}
+
+// offStatusText is the status of a feature its file turned off, with the
+// errors of the file if it has any.
+func offStatusText(label string, errors int) string {
+	if errors == 0 {
+		return label
+	}
+	return label + ", " + errorsText(errors)
+}
+
+// errorsText counts errors for a status text: "1 error", "N errors".
+func errorsText(n int) string {
+	if n == 1 {
+		return "1 error"
+	}
+	return fmt.Sprintf("%d errors", n)
 }
 
 // leaderStatusText counts the files that name no trigger key and the
@@ -234,13 +285,13 @@ func leaderStatusText(set leader.Set) string {
 			failed++
 		}
 	}
-	return fmt.Sprintf("%d leaders, %d errors", len(set.Configs), failed)
+	return fmt.Sprintf("%d leaders, %s", len(set.Configs), errorsText(failed))
 }
 
 // mouseStatusText counts the files that name no supported button and the
 // buttons whose file failed to load as errors.
 func mouseStatusText(set gesture.Set) string {
-	return fmt.Sprintf("%d mouse buttons, %d errors", len(set.Configs), len(set.AllErrors()))
+	return fmt.Sprintf("%d mouse buttons, %s", len(set.Configs), errorsText(len(set.AllErrors())))
 }
 
 func placeholderFailed(name string, errs []error) {
@@ -766,25 +817,17 @@ func notify(title, body string) {
 	}()
 }
 
-// idleApps are the apps whose use does not end a rest: chatting is not
-// working.
-var idleApps = map[string]bool{
-	"微信":     true,
-	"WeChat": true,
-	"Slack":  true,
-}
-
 // workNoticeLifetime is how long a rest reminder stays before it is
 // withdrawn.
 const workNoticeLifetime = 10 * time.Second
 
-// startActivity starts tracking the time worked without a break and
-// shows it in a bar on every display. Its state is kept in the user data
-// dir, not the config dir, whose watch would reload the rules on every
-// save.
+// startActivity starts tracking the time worked without a break and the
+// Dock badges, and shows them in a bar on every display, the timer on the
+// left. The timer's state is kept in the user data dir, not the config
+// dir, whose watch would reload the rules on every save.
 func (b *burin) startActivity() {
 	now := time.Now()
-	t := activity.NewTracker(now)
+	t := activity.NewTracker(now, activity.DefaultConfig)
 	save := func(activity.State) {}
 	if store := activityStore(); store != nil {
 		st, ok, err := store.Load()
@@ -802,8 +845,19 @@ func (b *burin) startActivity() {
 		t.Persist = save
 	}
 	t.OnWorkLimit = b.remindRest
+	topBar := bar.New()
+	t.OnChange = topBar.Invalidate
+	b.badges.OnChange = topBar.Invalidate
+	topBar.Add(t, b.badges)
+	// Publish the tracker only once its callbacks are set, as a reload may
+	// call SetConfig and SetEnabled on it from then on; the config is the
+	// one in effect now, a reload since startup included.
+	b.reloadMu.Lock()
+	t.SetConfig(b.timerConfig)
+	t.SetEnabled(!b.timerDisabled, time.Now())
 	b.activity = t
-	activity.NewBar(t)
+	b.reloadMu.Unlock()
+	b.badges.Start(badge.PollInterval)
 
 	sleep := func() { t.Sleep(time.Now()) }
 	wake := func() { t.Wake(time.Now()) }
@@ -815,18 +869,36 @@ func (b *burin) startActivity() {
 	ticker := time.NewTicker(activity.PollInterval)
 	go func() {
 		for now := range ticker.C {
+			// A disabled tracker ignores the tick: skip the main-thread
+			// calls for it.
+			if !t.Enabled() {
+				continue
+			}
 			// Both run on the main thread; the front app matters only while
 			// the user is at the keyboard.
 			systemIdle := mygo.Power.IdleTime()
 			inputRecent := systemIdle < activity.ActivityWindow
-			frontIdle := inputRecent && idleApps[workspace.FrontmostApp().Name]
+			frontIdle := inputRecent && b.frontIsIdleApp()
 			t.Tick(now, systemIdle, frontIdle)
 		}
 	}()
 	mygo.App.OnQuit(func() {
 		ticker.Stop()
+		b.badges.Stop()
 		save(t.State(time.Now()))
 	})
+}
+
+// frontIsIdleApp reports whether the frontmost app is one whose use
+// does not end a break.
+func (b *burin) frontIsIdleApp() bool {
+	apps := b.idleApps.Load()
+	noIdleApps := apps == nil || len(*apps) == 0
+	if noIdleApps {
+		return false
+	}
+	front := workspace.FrontmostApp()
+	return apps.Match(front.Name, front.BundleID)
 }
 
 // activityStore is the store of the activity state in the user data dir,
@@ -867,13 +939,15 @@ func (b *burin) remindRest(elapsed time.Duration) {
 }
 
 // reload rescans the snippets, leaders and mouse directories and rereads
-// the window rules and quitter rules.
+// the window rules, quitter rules, timer settings and badge apps.
 func (b *burin) reload() {
 	b.reloadSnippets()
 	b.reloadLeaders()
 	b.reloadMouse()
 	b.reloadWindowRules()
 	b.reloadQuitter()
+	b.reloadTimer()
+	b.reloadBadges()
 }
 
 // reloadSnippets rescans the snippets directory and swaps the keyword
@@ -970,6 +1044,53 @@ func (b *burin) reloadQuitter() {
 	b.quitterStatus.SetLabel(status)
 }
 
+// reloadTimer rereads the timer settings and hands them to the tracker,
+// once it runs. A missing or unreadable file has the default settings.
+func (b *burin) reloadTimer() {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+	s := activity.Load(b.timerFile)
+	b.timerConfig = s.Config
+	b.timerDisabled = !s.Enabled
+	b.idleApps.Store(&s.IdleApps)
+	if b.activity != nil {
+		b.activity.SetConfig(s.Config)
+		b.activity.SetEnabled(s.Enabled, time.Now())
+	}
+	for _, err := range s.Errors {
+		log.Printf("timer: %v", err)
+	}
+	if s.Defaulted {
+		log.Printf("timer: %s missing or unusable, using the defaults", b.timerFile)
+	}
+	status := timerStatusText(s)
+	log.Printf("loaded %s from %s", status, b.timerFile)
+	b.timerStatus.SetLabel(status)
+}
+
+// reloadBadges rereads the badge apps and hands them to the watcher. A
+// missing or unreadable file has the default apps.
+func (b *burin) reloadBadges() {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+	set := badge.Load(b.badgesFile)
+	apps := set.Apps
+	if !set.Enabled {
+		// Without apps the watcher reads nothing and shows no badges.
+		apps = nil
+	}
+	b.badges.SetApps(apps)
+	for _, err := range set.Errors {
+		log.Printf("badges: %v", err)
+	}
+	if set.Defaulted {
+		log.Printf("badges: %s missing or unusable, using the defaults", b.badgesFile)
+	}
+	status := badgesStatusText(set)
+	log.Printf("loaded %s from %s", status, b.badgesFile)
+	b.badgesStatus.SetLabel(status)
+}
+
 // newLeaderEvaluator is the evaluator of leader entries and mouse
 // gestures: the snippet built-ins plus reload, open, toggle and key,
 // which snippets do not get.
@@ -1039,6 +1160,9 @@ func main() {
 		mouseDir:        filepath.Join(dir, "mouse"),
 		windowRulesFile: filepath.Join(dir, windowrules.FileName),
 		quitterFile:     filepath.Join(dir, quitter.FileName),
+		timerFile:       filepath.Join(dir, activity.FileName),
+		badgesFile:      filepath.Join(dir, badge.FileName),
+		badges:          badge.NewWatcher(),
 		eval:            newEvaluator(scriptsDir, loginPath),
 		ex:              expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
 		io:              systemEventIO(),
@@ -1053,6 +1177,8 @@ func main() {
 	b.rulesStatus = fileItem("Loading window rules", examples, dir, windowrules.FileName)
 	b.quitterStatus = fileItem("Loading quitter rules", examples, dir, quitter.FileName)
 	b.mouseStatus = folderItem("Loading mouse gestures", b.mouseDir)
+	b.timerStatus = fileItem("Loading timer settings", examples, dir, activity.FileName)
+	b.badgesStatus = fileItem("Loading badge apps", examples, dir, badge.FileName)
 	leaderEval := b.newLeaderEvaluator(scriptsDir, loginPath)
 	b.leader = b.newLeader(leaderAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed))
 	b.runGesture = expandAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed)
@@ -1075,6 +1201,8 @@ func main() {
 		rulesWatcher := watch(dir, func() {
 			b.reloadWindowRules()
 			b.reloadQuitter()
+			b.reloadTimer()
+			b.reloadBadges()
 		})
 		// A display that drops and returns moves every window twice;
 		// rounds hold meanwhile so the rules do not clamp the windows to
@@ -1102,7 +1230,7 @@ func main() {
 			}
 		})
 
-		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.mouseStatus, b.rulesStatus, b.quitterStatus}
+		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.mouseStatus, b.rulesStatus, b.quitterStatus, b.timerStatus, b.badgesStatus}
 		if !trusted {
 			items = append(items, &mygo.MenuItem{Label: grantAccessibility, Click: func(*mygo.MenuItem, *mygo.Window) {
 				// Granted meanwhile: the tap needs a fresh process to see it.

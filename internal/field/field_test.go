@@ -83,3 +83,47 @@ func TestPreamble(t *testing.T) {
 		}
 	}
 }
+
+func TestBool(t *testing.T) {
+	tests := []struct {
+		value string
+		b, ok bool
+	}{
+		{value: "yes", b: true, ok: true},
+		{value: "true", b: true, ok: true},
+		{value: "no", ok: true},
+		{value: "false", ok: true},
+		{value: ""},
+		{value: "Yes"},
+		{value: "1"},
+		{value: "off"},
+	}
+	for _, tt := range tests {
+		b, ok := Bool(tt.value)
+		if b != tt.b || ok != tt.ok {
+			t.Errorf("Bool(%q) = %v, %v, want %v, %v", tt.value, b, ok, tt.b, tt.ok)
+		}
+	}
+}
+
+func TestPreambleBool(t *testing.T) {
+	tests := []struct {
+		data    string
+		def     bool
+		want    bool
+		wantErr bool
+	}{
+		{data: "", def: true, want: true},
+		{data: ":on: no\n", def: true, want: false},
+		{data: ":on: true\n", want: true},
+		{data: ":on: maybe\n", def: true, want: true, wantErr: true},
+		{data: ":on: no\n:on: no\n", def: true, want: true, wantErr: true},
+		{data: "## x\n:on: no\n", def: true, want: true},
+	}
+	for _, tt := range tests {
+		got, err := PreambleBool(tt.data, "on", tt.def)
+		if got != tt.want || (err != nil) != tt.wantErr {
+			t.Errorf("PreambleBool(%q, %v) = %v, %v; want %v, error %v", tt.data, tt.def, got, err, tt.want, tt.wantErr)
+		}
+	}
+}

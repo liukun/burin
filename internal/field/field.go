@@ -6,8 +6,9 @@
 // with the key between two colons at the very start of the line. Any
 // other line is not a field, and each format treats it as content or a
 // comment, so prose such as "Note: ..." never reads as a key. Leader,
-// mouse gesture, quitter and window rule files use it; snippet files have
-// no fields today but would use the same syntax if they gain some.
+// mouse gesture, quitter, window rule, timer and badge files use it;
+// snippet files have no fields today but would use the same syntax if
+// they gain some.
 package field
 
 import (
@@ -65,4 +66,44 @@ func Preamble(data, key string) (value string, ok bool, err error) {
 		value, ok = v, true
 	}
 	return value, ok, nil
+}
+
+// PreambleBool reads the yes-or-no field named key before the first
+// "## " heading of data, as Preamble and ParseBool do: def when it is
+// missing, or invalid, which is the error.
+func PreambleBool(data, key string, def bool) (bool, error) {
+	value, ok, err := Preamble(data, key)
+	if err != nil {
+		return def, err
+	}
+	if !ok {
+		return def, nil
+	}
+	b, err := ParseBool(key, value)
+	if err != nil {
+		return def, err
+	}
+	return b, nil
+}
+
+// ParseBool reads the value of the yes-or-no field named key, an error
+// unless Bool takes it.
+func ParseBool(key, value string) (bool, error) {
+	b, ok := Bool(value)
+	if !ok {
+		return false, fmt.Errorf(":%s: %q is not yes, no, true or false", key, value)
+	}
+	return b, nil
+}
+
+// Bool reads a yes-or-no field value: "yes" or "true" is true, "no" or
+// "false" is false, and anything else is not a boolean.
+func Bool(value string) (b, ok bool) {
+	switch value {
+	case "yes", "true":
+		return true, true
+	case "no", "false":
+		return false, true
+	}
+	return false, false
 }

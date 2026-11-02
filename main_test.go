@@ -8,6 +8,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"burin/internal/activity"
+	"burin/internal/badge"
 	"burin/internal/gesture"
 	"burin/internal/leader"
 	"burin/internal/placeholder"
@@ -44,7 +46,7 @@ func TestStatusText(t *testing.T) {
 		Snippets: make([]snippet.Snippet, 3),
 		Errors:   []error{errors.New("x")},
 	}
-	if got := statusText(tbl); got != "3 snippets, 1 errors" {
+	if got := statusText(tbl); got != "3 snippets, 1 error" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -87,8 +89,34 @@ func TestWindowRulesStatusText(t *testing.T) {
 		},
 		Errors: []error{errors.New("x")},
 	}
-	if got := windowRulesStatusText(set); got != "4 window rules, 1 errors" {
+	if got := windowRulesStatusText(set); got != "4 window rules, 1 error" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestTimerStatusText(t *testing.T) {
+	on := activity.Settings{Config: activity.DefaultConfig, Enabled: true, IdleApps: activity.Apps{{Name: "Slack"}}}
+	if got := timerStatusText(on); got != "Timer 2m idle, 25m work, 1 break apps, 0 errors" {
+		t.Errorf("on: got %q", got)
+	}
+	off := activity.Settings{Config: activity.DefaultConfig}
+	if got := timerStatusText(off); got != "Timer off" {
+		t.Errorf("off: got %q", got)
+	}
+	off.Errors = []error{errors.New("x")}
+	if got := timerStatusText(off); got != "Timer off, 1 error" {
+		t.Errorf("off with an error: got %q", got)
+	}
+}
+
+func TestBadgesStatusText(t *testing.T) {
+	on := badge.Set{Apps: []badge.App{{Name: "Slack"}}, Enabled: true}
+	if got := badgesStatusText(on); got != "1 badge apps, 0 errors" {
+		t.Errorf("on: got %q", got)
+	}
+	off := badge.Set{Apps: []badge.App{{Name: "Slack"}}, Errors: []error{errors.New("x"), errors.New("y")}}
+	if got := badgesStatusText(off); got != "Badges off, 2 errors" {
+		t.Errorf("off with errors: got %q", got)
 	}
 }
 
@@ -269,6 +297,14 @@ func TestTildePath(t *testing.T) {
 	for _, tt := range tests {
 		if got := tildePath(tt.path, tt.home); got != tt.want {
 			t.Errorf("tildePath(%q, %q) = %q, want %q", tt.path, tt.home, got, tt.want)
+		}
+	}
+}
+
+func TestErrorsText(t *testing.T) {
+	for n, want := range map[int]string{0: "0 errors", 1: "1 error", 2: "2 errors"} {
+		if got := errorsText(n); got != want {
+			t.Errorf("errorsText(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

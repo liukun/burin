@@ -73,6 +73,12 @@ dynamic content and your own scripts as pipes. See [docs/snippets.md](docs/snipp
 Hide or quit an app, or close its windows, once it has not been the frontmost app for a
 while. See [docs/quitter.md](docs/quitter.md).
 
+### Timer and badges
+
+A small bar at the top of every display shows how long you have been working without a
+break, reminds you to rest, and shows the Dock badges of the chat apps you choose. See
+[docs/timer.md](docs/timer.md) and [docs/badges.md](docs/badges.md).
+
 ### Window rules
 
 Pin an app's windows to a corner of a display, and keep other windows clear of a left

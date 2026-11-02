@@ -1,7 +1,8 @@
 // Package activity tracks how long the user has been working without a
-// break, from the system's idle time, and reminds them to rest after
-// WorkLimit. It is a port of a Hammerspoon script: the tracker keeps its
-// state machine, the bar shows its title on every display.
+// break, from the system's idle time, and reminds them to rest after the
+// configured work time. It is a port of a Hammerspoon script: the tracker
+// keeps its state machine and is a section of the bar, which shows its
+// title on every display.
 package activity
 
 import (
@@ -12,32 +13,49 @@ import (
 	"time"
 )
 
-// Thresholds of the tracker.
+// Defaults of the thresholds timer.md may set.
 const (
-	// IdleThreshold is how long the user must be idle in a row for an
+	// DefaultIdle is how long the user must be idle in a row for an
 	// active period to end.
-	IdleThreshold = 120 * time.Second
+	DefaultIdle = 120 * time.Second
+	// DefaultWork is how long an active period runs before the reminder.
+	DefaultWork = 25 * time.Minute
+)
+
+// DefaultConfig is the tracker's config without a timer.md.
+var DefaultConfig = Config{Idle: DefaultIdle, Work: DefaultWork}
+
+// Config is the tracker's thresholds the user may set. Both are
+// positive.
+type Config struct {
+	// Idle is how long the user must be idle in a row for an active
+	// period to end.
+	Idle time.Duration
+	// Work is how long an active period runs before the reminder.
+	Work time.Duration
+}
+
+// Internal thresholds of the tracker.
+const (
 	// ActiveThreshold is how long the user must be active in a row for an
 	// idle period to end; it is counted back into the new active period.
 	ActiveThreshold = 20 * time.Second
 	// ActivityWindow is how recent the last input must be for the user to
 	// count as active.
 	ActivityWindow = 10 * time.Second
-	// WorkLimit is how long an active period runs before the reminder.
-	WorkLimit = 25 * time.Minute
 	// PollInterval is how often Tick is meant to be called.
 	PollInterval = 2 * time.Second
 	// SaveInterval is how often Tick persists the state besides on
 	// transitions.
 	SaveInterval = 60 * time.Second
 	// renotifyInterval is how long after a reminder another one follows
-	// while the user keeps working past WorkLimit.
+	// while the user keeps working past the work time.
 	renotifyInterval = 60 * time.Second
 	// manualRestGrace is how long after Rest input is ignored, so the
 	// click that chose it does not end the rest right away.
 	manualRestGrace = 10 * time.Second
 	// overtimeStep adds a warning sign to the title for every so long
-	// past WorkLimit.
+	// past the work time.
 	overtimeStep = 5 * time.Minute
 	// maxWarnings caps the warning signs, half before the title and half
 	// after.
@@ -70,15 +88,18 @@ type Snapshot struct {
 	Resuming    bool
 	TodayActive time.Duration
 	Sessions    int
-	// Overtime is set while active past WorkLimit.
+	// Overtime is set while active past Work.
 	Overtime bool
+	// Work is the work time in force, which Overtime is past.
+	Work time.Duration
 }
 
 // Tracker is the state machine of active and idle periods. Its methods
 // are safe from any goroutine; its callbacks run without its lock held,
 // so they may call back into it.
 type Tracker struct {
-	// OnWorkLimit is called when the active period reaches WorkLimit, and
+	// OnWorkLimit is called when the active period reaches the work time,
+	// and
 	// again every minute while the user keeps working, with how long the
 	// period has run.
 	OnWorkLimit func(elapsed time.Duration)
@@ -90,6 +111,7 @@ type Tracker struct {
 	OnChange func()
 
 	mu          sync.Mutex
+	cfg         Config
 	status      Status
 	activeStart time.Time
 	// idleStart is zero while active.
@@ -99,6 +121,9 @@ type Tracker struct {
 	todayDate   string
 	lastUpdate  time.Time
 	sleeping    bool
+	// disabled is set while timer.md turns the timer off: like sleeping,
+	// but by the user's choice and apart from it.
+	disabled bool
 	// notified is set once the active period's first reminder went out.
 	notified   bool
 	lastNotify time.Time
@@ -113,9 +138,11 @@ type Tracker struct {
 	paused bool
 }
 
-// NewTracker starts a tracker in an active period beginning at now.
-func NewTracker(now time.Time) *Tracker {
+// NewTracker starts a tracker with cfg in an active period beginning at
+// now.
+func NewTracker(now time.Time, cfg Config) *Tracker {
 	return &Tracker{
+		cfg:         cfg,
 		status:      Active,
 		activeStart: now,
 		todayDate:   now.Format(dateLayout),
@@ -124,10 +151,14 @@ func NewTracker(now time.Time) *Tracker {
 }
 
 // Tick advances the tracker to now, given how long the system has had
-// no input and whether the frontmost app is one whose use counts as
-// rest. It does nothing while asleep.
+// no input and whether the frontmost app is an idle app, whose use does
+// not end a break. It does nothing while asleep or disabled.
 func (t *Tracker) Tick(now time.Time, systemIdle time.Duration, frontIdle bool) {
 	t.mu.Lock()
+	if t.disabled {
+		t.mu.Unlock()
+		return
+	}
 	var notify func()
 	var save *State
 	defer func() {
@@ -141,7 +172,12 @@ func (t *Tracker) Tick(now time.Time, systemIdle time.Duration, frontIdle bool) 
 	// A clock set back counts nothing rather than taking time away.
 	delta := max(now.Sub(t.lastUpdate), 0)
 	t.rollover(now)
-	isIdle := systemIdle >= ActivityWindow || frontIdle
+	// The front app only matters during a break: chatting while working
+	// is still time at the computer, but a glance at a message while
+	// away should not count as coming back.
+	noInput := systemIdle >= ActivityWindow
+	onBreak := t.status == Idle
+	isIdle := noInput || (onBreak && frontIdle)
 	t.paused = isIdle
 	t.lastUpdate = now
 
@@ -154,7 +190,7 @@ func (t *Tracker) Tick(now time.Time, systemIdle time.Duration, frontIdle bool) 
 			t.todayActive += delta
 		}
 		notify = t.checkWorkLimit(now, isIdle)
-		if t.consecIdle >= IdleThreshold {
+		if t.consecIdle >= t.cfg.Idle {
 			t.status = Idle
 			t.idleStart = now.Add(-t.consecIdle)
 			t.consecActive = 0
@@ -187,7 +223,7 @@ func (t *Tracker) Tick(now time.Time, systemIdle time.Duration, frontIdle bool) 
 // checkWorkLimit returns the reminder due at now, if any. t.mu is held.
 func (t *Tracker) checkWorkLimit(now time.Time, isIdle bool) func() {
 	elapsed := now.Sub(t.activeStart)
-	if elapsed < WorkLimit {
+	if elapsed < t.cfg.Work {
 		return nil
 	}
 	if !t.notified {
@@ -289,14 +325,24 @@ func (t *Tracker) Restart(now time.Time) {
 	})
 }
 
-// TestReminder starts an active period that reaches WorkLimit ten
+// TestReminder starts an active period that reaches the work time ten
 // seconds after now, to try the reminder.
 func (t *Tracker) TestReminder(now time.Time) {
 	t.update(now, func() {
 		t.resetToActive(now)
-		t.activeStart = now.Add(-WorkLimit + 10*time.Second)
+		t.activeStart = now.Add(-t.cfg.Work + 10*time.Second)
 		t.paused = false
 	})
+}
+
+// SetConfig changes the thresholds, as timer.md is reloaded. The current
+// period carries on: past a lowered threshold, the next tick ends it or
+// reminds.
+func (t *Tracker) SetConfig(cfg Config) {
+	t.mu.Lock()
+	t.cfg = cfg
+	t.mu.Unlock()
+	t.after(nil, nil)
 }
 
 // ResetToday clears the today counters.
@@ -312,6 +358,12 @@ func (t *Tracker) ResetToday(now time.Time) {
 func (t *Tracker) Sleep(now time.Time) {
 	t.mu.Lock()
 	t.sleeping = true
+	t.stop(now)
+}
+
+// stop ends the active period at now and saves the state, as Tick stops.
+// t.mu is held, and released.
+func (t *Tracker) stop(now time.Time) {
 	if t.status != Active {
 		t.consecActive = 0
 		t.mu.Unlock()
@@ -328,9 +380,41 @@ func (t *Tracker) Sleep(now time.Time) {
 func (t *Tracker) Wake(now time.Time) {
 	t.mu.Lock()
 	t.sleeping = false
+	t.resume(now)
+}
+
+// resume restarts Tick at now, not counting the time it was stopped.
+// t.mu is held, and released.
+func (t *Tracker) resume(now time.Time) {
 	t.lastUpdate = now
 	t.mu.Unlock()
 	t.after(nil, nil)
+}
+
+// SetEnabled turns the timer on or off at now, as timer.md is reloaded.
+// Off ends the active period as Sleep does, stops Tick and the
+// reminders, and empties Items; on resumes Tick as Wake does. Setting
+// the value in force does nothing.
+func (t *Tracker) SetEnabled(enabled bool, now time.Time) {
+	t.mu.Lock()
+	unchanged := t.disabled == !enabled
+	if unchanged {
+		t.mu.Unlock()
+		return
+	}
+	t.disabled = !enabled
+	if !enabled {
+		t.stop(now)
+		return
+	}
+	t.resume(now)
+}
+
+// Enabled reports whether the timer is on.
+func (t *Tracker) Enabled() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.disabled
 }
 
 // Snapshot returns what the bar shows at now.
@@ -342,6 +426,7 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		Paused:      t.paused,
 		TodayActive: t.todayActive,
 		Sessions:    t.sessions,
+		Work:        t.cfg.Work,
 	}
 	if t.status == Idle {
 		if !t.idleStart.IsZero() {
@@ -351,14 +436,15 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		return s
 	}
 	s.Elapsed = now.Sub(t.activeStart)
-	s.IdleIn = IdleThreshold - t.consecIdle
-	s.Overtime = s.Elapsed >= WorkLimit
+	// A threshold lowered by a reload may be passed until the next tick.
+	s.IdleIn = max(t.cfg.Idle-t.consecIdle, 0)
+	s.Overtime = s.Elapsed >= t.cfg.Work
 	return s
 }
 
 // Title is the bar's text for s: "▶12m -2m" while active ("⏸︎" when the
 // last tick found the user idle), with warning signs around it past
-// WorkLimit, and "💤 5m" while idle ("❓" while the user is back but not
+// s.Work, and "💤 5m" while idle ("❓" while the user is back but not
 // yet for ActiveThreshold).
 func Title(s Snapshot) string {
 	if s.Status == Idle {
@@ -377,7 +463,7 @@ func Title(s Snapshot) string {
 	}
 	var prefix, suffix string
 	if s.Overtime {
-		count := min(maxWarnings, 1+int((s.Elapsed-WorkLimit)/overtimeStep))
+		count := min(maxWarnings, 1+int((s.Elapsed-s.Work)/overtimeStep))
 		half := count / 2
 		prefix = strings.Repeat("⚠️", count-half)
 		suffix = strings.Repeat("⚠️", half)

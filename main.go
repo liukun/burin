@@ -130,7 +130,10 @@ type burin struct {
 	// every tick and swapped on reload.
 	idleApps atomic.Pointer[activity.Apps]
 	// badges watches the Dock badges of the apps of badges.md.
-	badges       *badge.Watcher
+	badges *badge.Watcher
+	// speaker speaks the counts of the badges of the Speak apps during a
+	// break.
+	speaker      *badge.Speaker
 	badgesStatus *mygo.MenuItem
 	// workNotice is the last rest reminder, closed as the next one shows;
 	// workNoticeMu guards it.
@@ -880,6 +883,9 @@ func (b *burin) startActivity() {
 			inputRecent := systemIdle < activity.ActivityWindow
 			frontIdle := inputRecent && b.frontIsIdleApp()
 			t.Tick(now, systemIdle, frontIdle)
+			if t.OnBreak() {
+				b.speaker.Tick(now, b.badges.Badges())
+			}
 		}
 	}()
 	mygo.App.OnQuit(func() {
@@ -1080,6 +1086,7 @@ func (b *burin) reloadBadges() {
 		apps = nil
 	}
 	b.badges.SetApps(apps)
+	b.speaker.SetWindow(set.SpeakFrom, set.SpeakUntil)
 	for _, err := range set.Errors {
 		log.Printf("badges: %v", err)
 	}
@@ -1163,6 +1170,7 @@ func main() {
 		timerFile:       filepath.Join(dir, activity.FileName),
 		badgesFile:      filepath.Join(dir, badge.FileName),
 		badges:          badge.NewWatcher(),
+		speaker:         badge.NewSpeaker(),
 		eval:            newEvaluator(scriptsDir, loginPath),
 		ex:              expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
 		io:              systemEventIO(),

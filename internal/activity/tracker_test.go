@@ -250,6 +250,9 @@ func TestSleepAndWake(t *testing.T) {
 	if s := tr.Snapshot(now); s.Status != Idle {
 		t.Fatalf("status = %v while asleep, want idle", s.Status)
 	}
+	if tr.OnBreak() {
+		t.Error("OnBreak = true while asleep, want false")
+	}
 	tr.Wake(now)
 	run(tr, &now, ActiveThreshold, 0, false)
 	if s := tr.Snapshot(now); s.Status != Active || s.Elapsed != ActiveThreshold {
@@ -573,5 +576,22 @@ func TestWakeWhileDisabledKeepsTickStopped(t *testing.T) {
 	run(tr, &now, 5*time.Minute, 0, false)
 	if s := tr.Snapshot(now); s.Status != Idle || s.TodayActive != 0 {
 		t.Errorf("snapshot = %+v, want idle with nothing counted", s)
+	}
+}
+
+func TestOnBreak(t *testing.T) {
+	tr := NewTracker(base, DefaultConfig)
+	now := base
+	run(tr, &now, ActiveThreshold, 0, false)
+	if tr.Snapshot(now).Status != Active || tr.OnBreak() {
+		t.Fatal("OnBreak = true while active, want false")
+	}
+	tr.Rest(now)
+	if !tr.OnBreak() {
+		t.Fatal("OnBreak = false while idle, want true")
+	}
+	tr.SetEnabled(false, now)
+	if tr.OnBreak() {
+		t.Error("OnBreak = true with the timer off, want false")
 	}
 }

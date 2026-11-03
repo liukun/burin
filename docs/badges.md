@@ -10,8 +10,13 @@ order the bar shows them, after an optional switch before the first heading:
 
 ```markdown
 :enabled: yes
+:speak_from: 10:00
+:speak_until: 22:00
 
 ## Slack
+:count_only: yes
+:speak: yes
+
 ## WhatsApp
 ## Telegram
 
@@ -32,11 +37,22 @@ order the bar shows them, after an optional switch before the first heading:
 - `:count_only: yes` hides the app's badge while it is a dot rather than a count, so the
   app only shows with a number. Slack and Discord badge a dot for unread channel messages
   and a number for direct messages and mentions, so this keeps the ones meant for you.
+- `:speak: yes` reads the app's count aloud while you are on a break (the
+  [timer](timer.md) shows one; nothing is spoken while the timer is off or the Mac sleeps
+  or is locked): "Slack has 3 messages", or "99 plus messages" for a `99+`, several apps in one
+  breath. A dot is not spoken. The count is spoken again every minute while the break and the badge last, even
+  if it has not changed, so a message that came in as you stepped away still reaches you.
+  The default is `no`.
+- `:speak_from:` and `:speak_until:`, before the first heading, are the time of day counts
+  may be spoken, as `HH:MM` on a 24-hour clock: 10:00 and 22:00 by default. An until
+  earlier than the from crosses midnight (`22:00` to `02:00`); the same time for both
+  speaks never.
 
 Without a `badges.md`, Slack, WhatsApp, Telegram and 微信 are shown. A file that is there
 but has no sections shows none. A section with an unknown key, a repeated key or a `:count_only:`
-other than `yes`, `no`, `true` or `false` is skipped, and an `:enabled:` other than those
-leaves the badges on; all are counted as errors in the tray, which shows `Badges off` while the badges are off. The file is watched, and the tray's Reload rereads it too; a change
+or `:speak:` other than `yes`, `no`, `true` or `false` is skipped, an `:enabled:` other than those
+leaves the badges on, and a `:speak_from:` or `:speak_until:` that is not a time, or is
+repeated, keeps its default; all are counted as errors in the tray, which shows `Badges off` while the badges are off. The file is watched, and the tray's Reload rereads it too; a change
 shows at the next read.
 
 The badges are read from the Dock through Accessibility every 2 seconds, so they need

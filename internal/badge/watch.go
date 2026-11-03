@@ -34,6 +34,8 @@ type Badge struct {
 	Label string
 	// Path is the app's bundle as the Dock knows it, empty when unknown.
 	Path string
+	// Speak is whether the app's count is spoken during a break.
+	Speak bool
 }
 
 // Watcher reads the Dock's badges of its apps every PollInterval and is
@@ -65,11 +67,10 @@ type Watcher struct {
 	// iconFailures holds the last failure of every app whose icon could
 	// not be drawn, tried again iconRetry after it.
 	iconFailures map[string]iconFailure
-	// lastErr is the last read error logged, so a lasting one is logged
-	// once.
-	lastErr string
-	stop    chan struct{}
-	stopped bool
+	// readErrors logs read failures, a lasting one once.
+	readErrors errorLog
+	stop       chan struct{}
+	stopped    bool
 }
 
 // NewWatcher returns a watcher of the Dock with no apps.
@@ -82,6 +83,7 @@ func NewWatcher() *Watcher {
 		now:          time.Now,
 		icons:        map[string]ui.ImageSource{},
 		iconFailures: map[string]iconFailure{},
+		readErrors:   errorLog{prefix: "badges: "},
 	}
 }
 
@@ -171,15 +173,28 @@ func (w *Watcher) poll() {
 func (w *Watcher) logError(err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.readErrors.log(err)
+}
+
+// errorLog logs errors with prefix, a lasting one once: an error is
+// logged unless it is the last one logged, and nil forgets it. Its
+// owner guards it.
+type errorLog struct {
+	prefix string
+	last   string
+}
+
+// log logs err unless it is the last one logged; nil forgets it.
+func (l *errorLog) log(err error) {
 	if err == nil {
-		w.lastErr = ""
+		l.last = ""
 		return
 	}
-	if err.Error() == w.lastErr {
+	if err.Error() == l.last {
 		return
 	}
-	w.lastErr = err.Error()
-	log.Printf("badges: %v", err)
+	l.last = err.Error()
+	log.Printf("%s%v", l.prefix, err)
 }
 
 // setBadges keeps badges and calls OnChange when they changed, or
@@ -245,6 +260,13 @@ func (w *Watcher) iconFailed(name string, err error) {
 	log.Printf("badges: icon of %s: %v", name, err)
 }
 
+// Badges returns the badges of the last read, in the order of the apps.
+func (w *Watcher) Badges() []Badge {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.badges)
+}
+
 // Items makes the watcher a section of the bar: the icon and badge of
 // every app with one, which a click activates.
 func (w *Watcher) Items() []bar.Item {
@@ -291,7 +313,7 @@ func match(apps []App, icons map[string]DockIcon, bundles map[string]string) []B
 			continue
 		}
 		seen[name] = true
-		badges = append(badges, Badge{Name: name, Label: icon.Label, Path: icon.Path})
+		badges = append(badges, Badge{Name: name, Label: icon.Label, Path: icon.Path, Speak: a.Speak})
 	}
 	return badges
 }

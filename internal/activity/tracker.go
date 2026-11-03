@@ -417,6 +417,16 @@ func (t *Tracker) Enabled() bool {
 	return !t.disabled
 }
 
+// OnBreak reports whether the user is on a break at the Mac: the timer
+// is on and idle. A sleeping tracker, between Sleep and Wake, reads Idle
+// too, as Sleep ends the active period, but the user is then away from
+// the Mac, not on a break at it.
+func (t *Tracker) OnBreak() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.disabled && !t.sleeping && t.status == Idle
+}
+
 // Snapshot returns what the bar shows at now.
 func (t *Tracker) Snapshot(now time.Time) Snapshot {
 	t.mu.Lock()

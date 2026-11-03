@@ -94,6 +94,58 @@ func TestParseEnabled(t *testing.T) {
 	}
 }
 
+func TestParseSpeak(t *testing.T) {
+	data := `## Yes
+:speak: yes
+## True
+:speak: true
+## No
+:speak: no
+## Unset
+## Bad
+:speak: maybe
+## Twice
+:speak: yes
+:speak: yes
+`
+	s := Parse(data)
+	want := []App{{Name: "Yes", Speak: true}, {Name: "True", Speak: true}, {Name: "No"}, {Name: "Unset"}}
+	if !reflect.DeepEqual(s.Apps, want) {
+		t.Errorf("apps = %+v, want %+v", s.Apps, want)
+	}
+	if len(s.Errors) != 2 {
+		t.Errorf("errors = %v, want 2", s.Errors)
+	}
+}
+
+func TestParseSpeakWindow(t *testing.T) {
+	tests := []struct {
+		data        string
+		from, until int
+		errors      int
+	}{
+		{data: "## Slack\n", from: DefaultSpeakFrom, until: DefaultSpeakUntil},
+		{data: ":speak_from: 08:30\n:speak_until: 18:05\n## Slack\n", from: 8*60 + 30, until: 18*60 + 5},
+		{data: ":speak_from: 07:00\n", from: 7 * 60, until: DefaultSpeakUntil},
+		// A window past midnight is kept as given.
+		{data: ":speak_from: 22:00\n:speak_until: 02:00\n", from: 22 * 60, until: 2 * 60},
+		{data: ":speak_from: noon\n:speak_until: 25:00\n", from: DefaultSpeakFrom, until: DefaultSpeakUntil, errors: 2},
+		{data: ":speak_until:\n", from: DefaultSpeakFrom, until: DefaultSpeakUntil, errors: 1},
+		{data: ":speak_from: 08:00\n:speak_from: 09:00\n", from: DefaultSpeakFrom, until: DefaultSpeakUntil, errors: 1},
+		// A key in a section is not the window's.
+		{data: "## Slack\n:speak_from: 08:00\n", from: DefaultSpeakFrom, until: DefaultSpeakUntil, errors: 1},
+	}
+	for _, tt := range tests {
+		s := Parse(tt.data)
+		if s.SpeakFrom != tt.from || s.SpeakUntil != tt.until || len(s.Errors) != tt.errors {
+			t.Errorf("Parse(%q): window %d-%d, errors %v; want %d-%d, %d errors", tt.data, s.SpeakFrom, s.SpeakUntil, s.Errors, tt.from, tt.until, tt.errors)
+		}
+	}
+	if d := defaultSet(nil); d.SpeakFrom != DefaultSpeakFrom || d.SpeakUntil != DefaultSpeakUntil {
+		t.Errorf("default window = %d-%d, want %d-%d", d.SpeakFrom, d.SpeakUntil, DefaultSpeakFrom, DefaultSpeakUntil)
+	}
+}
+
 func TestParseNoSectionsHasNoApps(t *testing.T) {
 	s := Parse("all gone\n")
 	if len(s.Apps) != 0 || s.Defaulted {
@@ -130,16 +182,22 @@ func TestMatch(t *testing.T) {
 	got := match(apps, icons, bundles)
 	// In the order of apps; Mail has no badge, Notes is not an app, and
 	// Slack shows once.
-	want := []Badge{{"Telegram", "3", ""}, {"Slack", "•", "/Applications/Slack.app"}, {"Chat Pro", "1", ""}}
+	want := []Badge{{Name: "Telegram", Label: "3"}, {Name: "Slack", Label: "•", Path: "/Applications/Slack.app"}, {Name: "Chat Pro", Label: "1"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("match = %+v, want %+v", got, want)
 	}
 	// A count_only app shows a count, not a dot.
 	counted := []App{{Name: "Slack", CountOnly: true}, {Name: "Telegram", CountOnly: true}, {Name: "Chat", CountOnly: true}}
 	countIcons := map[string]DockIcon{"Slack": {Label: "•"}, "Telegram": {Label: "3"}, "Chat": {Label: "99+"}}
-	wantCounted := []Badge{{"Telegram", "3", ""}, {"Chat", "99+", ""}}
+	wantCounted := []Badge{{Name: "Telegram", Label: "3"}, {Name: "Chat", Label: "99+"}}
 	if got := match(counted, countIcons, nil); !reflect.DeepEqual(got, wantCounted) {
 		t.Errorf("match of count_only apps = %+v, want %+v", got, wantCounted)
+	}
+	// A speak app's badge carries Speak.
+	spoken := []App{{Name: "Slack", Speak: true}, {Name: "Telegram"}}
+	wantSpoken := []Badge{{Name: "Slack", Label: "•", Path: "/Applications/Slack.app", Speak: true}, {Name: "Telegram", Label: "3"}}
+	if got := match(spoken, icons, nil); !reflect.DeepEqual(got, wantSpoken) {
+		t.Errorf("match of speak apps = %+v, want %+v", got, wantSpoken)
 	}
 	// A bundle with no running app matches nothing, not the app with
 	// no name.
@@ -224,6 +282,23 @@ func TestWatcherReportsChanges(t *testing.T) {
 	w.poll()
 	if changes != 3 || len(w.Items()) != 0 {
 		t.Errorf("changes = %d, items = %+v after a failed read, want cleared", changes, w.Items())
+	}
+}
+
+func TestWatcherBadges(t *testing.T) {
+	d := &fakeDock{labels: map[string]DockIcon{"Slack": {Label: "3"}, "Telegram": {Label: "•"}}}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Slack", Speak: true}, {Name: "Telegram"}})
+	w.poll()
+	got := w.Badges()
+	want := []Badge{{Name: "Slack", Label: "3", Speak: true}, {Name: "Telegram", Label: "•"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Badges = %+v, want %+v", got, want)
+	}
+	// The badges are a copy, not the watcher's own.
+	got[0].Label = "changed"
+	if w.Badges()[0].Label != "3" {
+		t.Error("changing the returned badges changed the watcher's")
 	}
 }
 

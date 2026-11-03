@@ -3,18 +3,18 @@ package windowrules
 import (
 	"errors"
 	"maps"
-	"regexp"
 	"slices"
 	"testing"
 )
 
 // fakeInspector answers from tables and records which windows and apps
-// it was asked about.
+// it was asked about. apps defaults to testApps, so the many cases that
+// pin Slack need not repeat its Accessibility windows.
 type fakeInspector struct {
 	infos      map[uint32]Info
 	failed     map[uint32]bool
 	asked      []uint32
-	apps       map[int32][]Info
+	apps       map[int32][]AppWindow
 	appsFailed map[int32]bool
 	askedApps  []int32
 }
@@ -27,12 +27,16 @@ func (f *fakeInspector) Inspect(w CGWindow) (Info, error) {
 	return f.infos[w.ID], nil
 }
 
-func (f *fakeInspector) AppWindows(pid int32) ([]Info, error) {
+func (f *fakeInspector) AppWindows(pid int32) ([]AppWindow, error) {
 	f.askedApps = append(f.askedApps, pid)
 	if f.appsFailed[pid] {
 		return nil, errors.New("AX timeout")
 	}
-	return f.apps[pid], nil
+	apps := f.apps
+	if apps == nil {
+		apps = testApps
+	}
+	return apps[pid], nil
 }
 
 // queries counts every call made to f.
@@ -56,7 +60,7 @@ var (
 	// on the portrait display, a 66pt left margin on the BenQ.
 	testConfig = Config{
 		Pins: []Rule{
-			{App: "Slack", Screen: &benqSize, Anchor: TopLeft, MainTitle: regexp.MustCompile(`\[Main\]`),
+			{App: "Slack", Screen: &benqSize, Anchor: TopLeft, Oldest: true,
 				Width: Range{0.7, 0.9}, Height: Range{0.5, 0.8}},
 			{App: "Yab", Screen: &benqSize, Anchor: BottomLeft, FullScreenable: true,
 				Width: Range{0.7, 0.9}, Height: Range{0.5, 0.8}},
@@ -92,12 +96,12 @@ var (
 		801:  {Subrole: standardWindow, Minimized: true},
 	}
 
-	// testApps is what AppWindows says: Slack's main window is minimized
-	// but still titled [Main], next to the huddle popup.
-	testApps = map[int32][]Info{
+	// testApps is what AppWindows says: Slack's main window, minimized
+	// when CoreGraphics does not list it, next to the huddle popup.
+	testApps = map[int32][]AppWindow{
 		10: {
-			{Subrole: standardWindow, Title: "general - f2pool - Slack [Main]", Minimized: true},
-			testInfos[3483],
+			{ID: 102, Info: Info{Subrole: standardWindow, Title: "general - f2pool - Slack [Main]", Minimized: true}},
+			{ID: 3483, Info: testInfos[3483]},
 		},
 	}
 )
@@ -122,7 +126,7 @@ func TestPlan(t *testing.T) {
 		windows   []CGWindow
 		displays  []Display
 		failed    map[uint32]bool
-		apps      map[int32][]Info
+		apps      map[int32][]AppWindow
 		appsFail  map[int32]bool
 		wantMoves map[uint32]Rect
 		wantAsked []uint32
@@ -135,6 +139,7 @@ func TestPlan(t *testing.T) {
 			displays:  desk,
 			wantMoves: map[uint32]Rect{},
 			wantAsked: []uint32{102},
+			wantApps:  []int32{10},
 		},
 		{
 			name:      "Slack 拖离左上角归位",
@@ -142,6 +147,7 @@ func TestPlan(t *testing.T) {
 			displays:  desk,
 			wantMoves: map[uint32]Rect{102: slackMainAt},
 			wantAsked: []uint32{102},
+			wantApps:  []int32{10},
 		},
 		{
 			name:      "Slack 铺满可用区夹到上限",
@@ -149,6 +155,7 @@ func TestPlan(t *testing.T) {
 			displays:  desk,
 			wantMoves: map[uint32]Rect{102: {0, 30, 1728, 956}},
 			wantAsked: []uint32{102},
+			wantApps:  []int32{10},
 		},
 		{
 			name:      "Slack 在副屏搬到规则屏",
@@ -156,6 +163,7 @@ func TestPlan(t *testing.T) {
 			displays:  desk,
 			wantMoves: map[uint32]Rect{102: {0, 30, 1344, 800}},
 			wantAsked: []uint32{102},
+			wantApps:  []int32{10},
 		},
 		{
 			name:      "huddle 弹窗不钉，只右移 66",
@@ -163,40 +171,39 @@ func TestPlan(t *testing.T) {
 			displays:  desk,
 			wantMoves: map[uint32]Rect{3483: {66, 500, 400, 300}},
 			wantAsked: []uint32{102, 3483},
-		},
-		{
-			name:      "主窗口不在 CG 列表但 AX 标题带 [Main]：huddle 只右移 66",
-			windows:   []CGWindow{slackHuddle},
-			displays:  desk,
-			apps:      testApps,
-			wantMoves: map[uint32]Rect{3483: {66, 500, 400, 300}},
-			wantAsked: []uint32{3483},
 			wantApps:  []int32{10},
 		},
 		{
-			name:      "主窗口全屏被 CG 预过滤：huddle 只右移 66",
+			name:      "主窗口全屏被 CG 预过滤：app 整轮不钉，huddle 只右移 66",
 			windows:   []CGWindow{at(slackMain, benq.Frame), slackHuddle},
 			displays:  desk,
-			apps:      testApps,
 			wantMoves: map[uint32]Rect{3483: {66, 500, 400, 300}},
 			wantAsked: []uint32{3483},
 			wantApps:  []int32{10},
 		},
 		{
-			name:      "app 内没有 [Main] 窗口：全部钉住",
+			name:      "主窗口最小化，屏上只剩 huddle：不钉，只右移 66",
 			windows:   []CGWindow{slackHuddle},
 			displays:  desk,
-			apps:      map[int32][]Info{10: {testInfos[3483]}},
-			wantMoves: map[uint32]Rect{3483: {0, 30, 1344, 597.5}},
+			wantMoves: map[uint32]Rect{3483: {66, 500, 400, 300}},
 			wantAsked: []uint32{3483},
 			wantApps:  []int32{10},
 		},
 		{
-			name:      "AppWindows 失败：不钉，只右移 66",
+			name:      "AX 查 app 窗口失败：不钉，只右移 66",
 			windows:   []CGWindow{slackHuddle},
 			displays:  desk,
 			appsFail:  map[int32]bool{10: true},
 			wantMoves: map[uint32]Rect{3483: {66, 500, 400, 300}},
+			wantAsked: []uint32{3483},
+			wantApps:  []int32{10},
+		},
+		{
+			name:      "AX 里也只有这一个窗口：它就是最老的，钉住",
+			windows:   []CGWindow{slackHuddle},
+			displays:  desk,
+			apps:      map[int32][]AppWindow{10: {{ID: 3483, Info: testInfos[3483]}}},
+			wantMoves: map[uint32]Rect{3483: {0, 30, 1344, 597.5}},
 			wantAsked: []uint32{3483},
 			wantApps:  []int32{10},
 		},
@@ -295,6 +302,35 @@ func TestPlan(t *testing.T) {
 	}
 }
 
+// An oldest rule with fullScreenable takes the oldest among the windows
+// with a full screen button: an older window without one, such as a
+// welcome or settings window, must not keep the main window from being
+// pinned.
+func TestPlanOldestAfterFilters(t *testing.T) {
+	yabWelcome := CGWindow{ID: 300, PID: 20, Owner: "Yab", Bounds: Rect{10, 400, 600, 500}}
+	welcomeInfo := standard("Welcome")
+	infos := maps.Clone(testInfos)
+	infos[yabWelcome.ID] = welcomeInfo
+	insp := &fakeInspector{
+		infos: infos,
+		apps: map[int32][]AppWindow{20: {
+			{ID: yabWelcome.ID, Info: welcomeInfo},
+			{ID: yabMain.ID, Info: testInfos[yabMain.ID]},
+		}},
+	}
+	rule := Rule{App: "Yab", Screen: &benqSize, Anchor: BottomLeft, FullScreenable: true, Oldest: true,
+		Width: Range{0.7, 0.9}, Height: Range{0.5, 0.8}}
+	windows := []CGWindow{yabWelcome, at(yabMain, Rect{200, 200, 1500, 700})}
+	moves, _, _ := Plan(Config{Pins: []Rule{rule}}, windows, desk, nil, insp)
+	want := map[uint32]Rect{yabMain.ID: yabMain.Bounds}
+	if got := moveTargets(moves); !maps.Equal(got, want) {
+		t.Fatalf("moves = %+v, want %+v", got, want)
+	}
+	if !slices.Equal(insp.askedApps, []int32{20}) {
+		t.Fatalf("askedApps = %+v, want %+v", insp.askedApps, []int32{20})
+	}
+}
+
 // A pin rule without a screen keeps the window on its own display.
 func TestPlanRuleWithoutScreen(t *testing.T) {
 	cfg := Config{Pins: []Rule{{App: "kitty", Anchor: TopLeft, Width: Range{0.5, 0.9}, Height: Range{0.3, 0.9}}}}
@@ -385,8 +421,8 @@ func TestPlanCache(t *testing.T) {
 		if !slices.Equal(insp.asked, r.wantAsked) {
 			t.Fatalf("%s: asked = %+v, want %+v", r.name, insp.asked, r.wantAsked)
 		}
-		if stats.Inspects != len(r.wantAsked) {
-			t.Fatalf("%s: stats.Inspects = %+v, want %+v", r.name, stats.Inspects, len(r.wantAsked))
+		if stats.Inspects != insp.queries() {
+			t.Fatalf("%s: stats.Inspects = %+v, want %+v", r.name, stats.Inspects, insp.queries())
 		}
 		if len(moves) != r.wantMoves {
 			t.Fatalf("%s: moves = %+v, want %+v", r.name, moves, r.wantMoves)
@@ -466,12 +502,13 @@ func TestPlanCachesAppWindows(t *testing.T) {
 	}{
 		{"首轮查 app 窗口", []CGWindow{slackHuddle}, []int32{10}},
 		{"快照不变不再查", []CGWindow{slackHuddle}, nil},
-		{"主窗口回到屏上不必查", []CGWindow{slackMain, slackHuddle}, nil},
+		{"主窗口回到屏上：快照变了重查", []CGWindow{slackMain, slackHuddle}, []int32{10}},
+		{"主窗口在屏上稳态不再查", []CGWindow{slackMain, slackHuddle}, nil},
 		{"主窗口再离开重新查", []CGWindow{slackHuddle}, []int32{10}},
 	}
 	var cache Cache
 	for _, r := range rounds {
-		insp := &fakeInspector{infos: testInfos, apps: testApps}
+		insp := &fakeInspector{infos: testInfos}
 		_, cache, _ = Plan(testConfig, r.windows, desk, cache, insp)
 		if !slices.Equal(insp.askedApps, r.wantApps) {
 			t.Fatalf("%s: askedApps = %+v, want %+v", r.name, insp.askedApps, r.wantApps)

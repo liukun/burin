@@ -6,18 +6,26 @@ import (
 	"slices"
 )
 
-// Inspector asks Accessibility about one window. It is only called for
-// windows whose app changed since the last round, so a steady desktop
+// Inspector asks Accessibility about windows. It is only called for
+// apps whose windows changed since the last round, so a steady desktop
 // costs no Accessibility IPC.
 type Inspector interface {
 	// Inspect returns the Info of w. It takes the whole CGWindow rather
 	// than its pid and ID because, without _AXUIElementGetWindow, the
 	// window is found among the app's Accessibility windows by bounds.
 	Inspect(w CGWindow) (Info, error)
-	// AppWindows returns the Info of every Accessibility window of pid,
-	// minimized ones included, which the CoreGraphics list of windows on
-	// screen leaves out.
-	AppWindows(pid int32) ([]Info, error)
+	// AppWindows returns the standard Accessibility windows of pid with
+	// their CGWindowIDs, minimized and full screen ones included, which
+	// the CoreGraphics list of windows on screen leaves out or the pin
+	// rule skips. A window without a CGWindowID is left out.
+	AppWindows(pid int32) ([]AppWindow, error)
+}
+
+// AppWindow is one of an app's Accessibility windows with its
+// CGWindowID, so its age can be compared with the listed windows'.
+type AppWindow struct {
+	ID   uint32
+	Info Info
 }
 
 // retryFailedAfter is how many rounds a failed Accessibility answer is
@@ -84,9 +92,9 @@ type inspection struct {
 
 // appInspection is an AppWindows result, kept like an inspection.
 type appInspection struct {
-	infos []Info
-	err   error
-	age   int
+	windows []AppWindow
+	err     error
+	age     int
 }
 
 // Stats counts the work of one Plan round.
@@ -236,7 +244,7 @@ func (p *planner) pin(rule Rule, windows []CGWindow) {
 		candidates = append(candidates, Window{CG: w, Info: p.info(w)})
 	}
 	selected := SelectWindows(rule, candidates)
-	if p.mainElsewhere(rule, appWindows, selected) {
+	if p.oldestElsewhere(rule, appWindows, selected) {
 		return
 	}
 	for _, w := range selected {
@@ -255,47 +263,57 @@ func (p *planner) pin(rule Rule, windows []CGWindow) {
 	}
 }
 
-// mainElsewhere reports whether rule has a main window that is not among
-// the selected windows, being minimized, in another Space or full screen:
-// the Lua module looked at all of an app's windows, and then pinned only
-// the main one, so here the rule leaves the app alone this round. It
-// asks Accessibility only when selected is not empty and holds no main
-// window. A failed AppWindows also counts as a main window
-// elsewhere, so a popup is not pinned on an unknown.
-func (p *planner) mainElsewhere(rule Rule, appWindows []CGWindow, selected []Window) bool {
-	if rule.MainTitle == nil || len(selected) == 0 {
+// oldestElsewhere reports whether rule keeps only the app's oldest window
+// and that window is not among the selected ones, so the rule leaves the
+// app alone this round. The oldest is taken from the app's Accessibility
+// windows, after the same filters SelectWindows applies, because the
+// CoreGraphics list leaves out a minimized main window, and pin skips a
+// full screen one before SelectWindows, which would then pick the oldest
+// of the rest, a pop-out or huddle window, and pin it. A failed AppWindows,
+// or one with no window passing the filters, also counts as the oldest
+// being elsewhere, so a pop-out is not pinned on an unknown. A window in
+// another Space is usually missing from AXWindows too, and is not seen.
+func (p *planner) oldestElsewhere(rule Rule, appWindows []CGWindow, selected []Window) bool {
+	if !rule.Oldest || len(selected) == 0 {
 		return false
 	}
-	for _, w := range selected {
-		if isMain(rule, w.Info) {
-			return false
-		}
-	}
+	var oldest uint32
+	found := false
 	pids := map[int32]bool{}
 	for _, w := range appWindows {
 		if pids[w.PID] {
 			continue
 		}
 		pids[w.PID] = true
-		infos, err := p.appWindows(w.PID)
-		if err != nil || HasMain(rule, infos) {
+		axWindows, err := p.appWindows(w.PID)
+		if err != nil {
 			return true
 		}
+		for _, aw := range axWindows {
+			if !passesFilters(rule, aw.Info) {
+				continue
+			}
+			isOlder := !found || aw.ID < oldest
+			if isOlder {
+				oldest, found = aw.ID, true
+			}
+		}
 	}
-	return false
+	// SelectWindows keeps a single window when rule.Oldest is set.
+	return !found || selected[0].CG.ID != oldest
 }
 
 // appWindows returns the AppWindows answer for pid, asking only when the
 // cache has none.
-func (p *planner) appWindows(pid int32) ([]Info, error) {
+func (p *planner) appWindows(pid int32) ([]AppWindow, error) {
 	entry := p.next[pid]
 	if entry.windows != nil {
-		return entry.windows.infos, entry.windows.err
+		return entry.windows.windows, entry.windows.err
 	}
 	p.stats.Inspects++
-	infos, err := p.insp.AppWindows(pid)
-	entry.windows = &appInspection{infos: infos, err: err}
-	return infos, err
+	windows, err := p.insp.AppWindows(pid)
+	entry.windows = &appInspection{windows: windows, err: err}
+	return windows, err
 }
 
 // margin applies a margin rule to every window on its display. It needs

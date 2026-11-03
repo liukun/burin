@@ -33,7 +33,7 @@ const (
 	keyHeightMin      = "height_min"
 	keyHeightMax      = "height_max"
 	keyTitle          = "title"
-	keyMainTitle      = "mainTitle"
+	keyOldest         = "oldest"
 	keyFullScreenable = "fullScreenable"
 	keyMargin         = "margin"
 	keyExcept         = "except"
@@ -44,7 +44,7 @@ var (
 	pinKeys = map[string]bool{
 		keyScreenW: true, keyScreenH: true, keyAnchor: true,
 		keyWidthMin: true, keyWidthMax: true, keyHeightMin: true, keyHeightMax: true,
-		keyTitle: true, keyMainTitle: true, keyFullScreenable: true,
+		keyTitle: true, keyOldest: true, keyFullScreenable: true,
 	}
 	marginKeys = map[string]bool{
 		keyScreenW: true, keyScreenH: true, keyMargin: true, keyExcept: true,
@@ -165,15 +165,27 @@ func parsePin(app string, values map[string][]string) (Rule, error) {
 	if rule.Title, err = optionalRegexp(values, keyTitle); err != nil {
 		return Rule{}, err
 	}
-	if rule.MainTitle, err = optionalRegexp(values, keyMainTitle); err != nil {
+	if rule.FullScreenable, err = optionalBool(values, keyFullScreenable); err != nil {
 		return Rule{}, err
 	}
-	if v, ok := values[keyFullScreenable]; ok {
-		if rule.FullScreenable, err = strconv.ParseBool(v[0]); err != nil {
-			return Rule{}, fmt.Errorf(":fullScreenable: %q is not true or false", v[0])
-		}
+	if rule.Oldest, err = optionalBool(values, keyOldest); err != nil {
+		return Rule{}, err
 	}
 	return rule, nil
+}
+
+// optionalBool reads the true or false of key, false when the section has
+// no such line.
+func optionalBool(values map[string][]string, key string) (bool, error) {
+	v, ok := values[key]
+	if !ok {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v[0])
+	if err != nil {
+		return false, fmt.Errorf(":%s: %q is not true or false", key, v[0])
+	}
+	return b, nil
 }
 
 func parseMargin(values map[string][]string) (MarginRule, error) {

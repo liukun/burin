@@ -165,20 +165,36 @@ func (s *axSession) Inspect(w CGWindow) (Info, error) {
 	return elementInfo(el), nil
 }
 
-// AppWindows implements Inspector. It reads every element of the app's
-// AXWindows, which, unlike the CoreGraphics list, holds minimized windows
-// too.
-func (s *axSession) AppWindows(pid int32) ([]Info, error) {
-	a := s.app(pid)
-	if a.err != nil {
-		return nil, a.err
+// AppWindows implements Inspector. It reads the app's standard windows
+// from AXWindows, which, unlike the CoreGraphics list of windows on
+// screen, holds minimized windows too. A window without a CGWindowID
+// cannot be compared by age and is left out; without
+// _AXUIElementGetWindow no window has one, which is an error.
+func (s *axSession) AppWindows(pid int32) ([]AppWindow, error) {
+	if axUIElementGetWindow == nil {
+		return nil, errors.New("window IDs are unavailable: no _AXUIElementGetWindow")
 	}
-	n := cfArrayGetCount(a.windows)
-	infos := make([]Info, 0, n)
-	for i := range n {
-		infos = append(infos, elementInfo(a.window(i)))
+	elements, err := s.standardWindows(pid)
+	if err != nil {
+		return nil, err
 	}
-	return infos, nil
+	windows := make([]AppWindow, 0, len(elements))
+	for _, el := range elements {
+		id, ok := windowID(el)
+		if !ok {
+			continue
+		}
+		windows = append(windows, AppWindow{ID: id, Info: elementInfo(el)})
+	}
+	return windows, nil
+}
+
+// windowID returns the CGWindowID of the window element el, false when
+// it has none. The caller checks that _AXUIElementGetWindow is available.
+func windowID(el uintptr) (uint32, bool) {
+	var id uint32
+	ok := axUIElementGetWindow(el, &id) == axErrorSuccess && id != 0
+	return id, ok
 }
 
 // CloseStandardWindows closes every standard window of the app of pid,
@@ -246,8 +262,8 @@ func RaiseNextWindow(pid int32) error {
 	ids := make([]uint32, 0, len(windows))
 	var mainID uint32
 	for _, el := range windows {
-		var id uint32
-		if axUIElementGetWindow(el, &id) != axErrorSuccess || id == 0 {
+		id, ok := windowID(el)
+		if !ok {
 			continue
 		}
 		byID[id] = el

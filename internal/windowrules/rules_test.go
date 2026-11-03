@@ -68,7 +68,7 @@ func TestLeftMarginFrame(t *testing.T) {
 func fakeWin(id uint32, title, app string, fullScreenButton bool) Window {
 	return Window{
 		CG:   CGWindow{ID: id, Owner: app},
-		Info: Info{Title: title, FullScreenButton: fullScreenButton},
+		Info: Info{Subrole: standardWindow, Title: title, FullScreenButton: fullScreenButton},
 	}
 }
 
@@ -81,37 +81,52 @@ func ids(wins []Window) []uint32 {
 }
 
 func TestSelectWindows(t *testing.T) {
-	mainRe := regexp.MustCompile(`\[Main\]`)
 	slackMain := fakeWin(102, "dev-private (Channel) - f2pool - Slack [Main] 🏠🔊", "Slack", false)
 	slackHuddle := fakeWin(3483, "dev-private - f2pool - 1 new item - Slack", "Slack", false)
-	slackAlone := fakeWin(200, "dev-private (Channel) - f2pool - Slack", "Slack", false)
+	slackDM := fakeWin(3600, "Xiaofei Li (DM) - f2pool+stakefish - Slack", "Slack", false)
 	yabMain := fakeWin(301, "Yab", "Yab", true)
 	yabSettings := fakeWin(302, "General", "Yab", false)
+	yabNewer := fakeWin(303, "Yab 2", "Yab", true)
+	// yabOldPanel is older than yabMain but has no full screen button.
+	yabOldPanel := fakeWin(300, "Welcome", "Yab", false)
 	// A window whose inspection failed has the zero Info: no title and no
 	// full screen button.
 	yabNoElement := Window{CG: CGWindow{ID: 301, Owner: "Yab"}}
+	// slackOldDialog is older than slackMain but is a dialog, which
+	// AppWindows never lists.
+	slackOldDialog := Window{
+		CG:   CGWindow{ID: 50, Owner: "Slack"},
+		Info: Info{Subrole: "AXDialog", Title: "Slack"},
+	}
+	slackNoElement := Window{CG: CGWindow{ID: 60, Owner: "Slack"}}
 	tests := []struct {
 		name string
 		rule Rule
 		wins []Window
 		want []uint32
 	}{
-		{"mainTitle：有 [Main] 只留主窗口", Rule{App: "Slack", MainTitle: mainRe},
-			[]Window{slackHuddle, slackMain}, []uint32{102}},
-		{"mainTitle：没有 [Main] 全部保留", Rule{App: "Slack", MainTitle: mainRe},
-			[]Window{slackAlone}, []uint32{200}},
-		{"无 mainTitle：全部保留", Rule{App: "Arc"},
-			[]Window{slackHuddle, slackMain}, []uint32{3483, 102}},
-		{"title 与 mainTitle 叠加：title 先过滤",
-			Rule{App: "Slack", Title: regexp.MustCompile("Channel"), MainTitle: mainRe},
-			[]Window{slackHuddle, slackMain}, []uint32{102}},
+		{"oldest：只留 CGWindowID 最小的窗口", Rule{App: "Slack", Oldest: true},
+			[]Window{slackDM, slackHuddle, slackMain}, []uint32{102}},
+		{"oldest 为 false：全部保留", Rule{App: "Slack"},
+			[]Window{slackDM, slackHuddle, slackMain}, []uint32{3600, 3483, 102}},
+		{"oldest：更老的 AXDialog 不算，取最老的标准窗口", Rule{App: "Slack", Oldest: true},
+			[]Window{slackHuddle, slackOldDialog, slackMain}, []uint32{102}},
+		{"oldest：拿不到 AX 元素的更老窗口不算", Rule{App: "Slack", Oldest: true},
+			[]Window{slackNoElement, slackHuddle, slackMain}, []uint32{102}},
+		{"oldest：没有标准窗口时为空", Rule{App: "Slack", Oldest: true},
+			[]Window{slackOldDialog, slackNoElement}, []uint32{}},
+		{"oldest：没有窗口仍为空", Rule{App: "Slack", Oldest: true},
+			nil, []uint32{}},
+		{"title 与 oldest 叠加：title 先过滤，再取最老",
+			Rule{App: "Slack", Title: regexp.MustCompile("new item"), Oldest: true},
+			[]Window{slackDM, slackHuddle, slackMain}, []uint32{3483}},
 		{"fullScreenable：只留有全屏按钮的窗口", Rule{App: "Yab", FullScreenable: true},
 			[]Window{yabSettings, yabMain}, []uint32{301}},
 		{"无 fullScreenable：全部保留", Rule{App: "Yab"},
 			[]Window{yabSettings, yabMain}, []uint32{302, 301}},
-		{"fullScreenable 与 mainTitle 叠加：无全屏按钮的窗口标题匹配也不返回",
-			Rule{App: "Yab", FullScreenable: true, MainTitle: regexp.MustCompile("General")},
-			[]Window{yabSettings, yabMain}, []uint32{301}},
+		{"fullScreenable 与 oldest 叠加：先滤掉无全屏按钮的窗口，再取最老",
+			Rule{App: "Yab", FullScreenable: true, Oldest: true},
+			[]Window{yabNewer, yabOldPanel, yabMain}, []uint32{301}},
 		{"fullScreenable：拿不到 AX 元素的窗口被过滤，不报错", Rule{App: "Yab", FullScreenable: true},
 			[]Window{yabSettings, yabNoElement}, []uint32{}},
 	}

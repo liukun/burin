@@ -14,7 +14,7 @@ const exampleFile = `Slack 重启后记不住位置，钉在 BenQ 左上角
 :screen_w: 1920
 :screen_h: 1280
 :anchor: topLeft
-:mainTitle: \[Main\]
+:oldest: true
 :width_min: 0.7
 :width_max: 0.9
 :height_min: 0.5
@@ -53,7 +53,7 @@ BenQ 上其他窗口左边留 66px 露出 Slack 侧栏
 // state reflect.DeepEqual should not look at.
 type comparableRule struct {
 	Rule
-	Title, MainTitle string
+	Title string
 }
 
 func comparableRules(rules []Rule) []comparableRule {
@@ -63,10 +63,7 @@ func comparableRules(rules []Rule) []comparableRule {
 		if r.Title != nil {
 			c.Title = r.Title.String()
 		}
-		if r.MainTitle != nil {
-			c.MainTitle = r.MainTitle.String()
-		}
-		c.Rule.Title, c.Rule.MainTitle = nil, nil
+		c.Rule.Title = nil
 		out = append(out, c)
 	}
 	return out
@@ -79,8 +76,8 @@ func TestParseExample(t *testing.T) {
 	}
 	benqSize, portraitSize := Size{1920, 1280}, Size{1080, 1920}
 	wantPins := []comparableRule{
-		{Rule: Rule{App: "Slack", Screen: &benqSize, Anchor: TopLeft, Width: Range{0.7, 0.9}, Height: Range{0.5, 0.8}},
-			MainTitle: `\[Main\]`},
+		{Rule: Rule{App: "Slack", Screen: &benqSize, Anchor: TopLeft, Oldest: true,
+			Width: Range{0.7, 0.9}, Height: Range{0.5, 0.8}}},
 		{Rule: Rule{App: "Yab", Screen: &benqSize, Anchor: BottomLeft, FullScreenable: true,
 			Width: Range{0.7, 0.9}, Height: Range{0.5, 0.8}}},
 		{Rule: Rule{App: "Trello", Screen: &portraitSize, Anchor: BottomLeft, Width: Range{0.95, 1}, Height: Range{0.3, 0.4}}},
@@ -94,9 +91,6 @@ func TestParseExample(t *testing.T) {
 	}
 	if got := set.Config.Len(); got != 4 {
 		t.Fatalf("Len = %+v, want %+v", got, 4)
-	}
-	if !set.Config.Pins[0].MainTitle.MatchString("general - Slack [Main] 🏠") {
-		t.Fatal("mainTitle does not match a [Main] title")
 	}
 }
 
@@ -125,6 +119,8 @@ func TestParseSectionErrors(t *testing.T) {
 		{"重复 key", validPin + ":anchor: bottomLeft\n", "duplicate :anchor:"},
 		{"坏正则", validPin + ":title: [\n", ":title:"},
 		{"fullScreenable 非布尔", validPin + ":fullScreenable: maybe\n", `"maybe" is not true or false`},
+		{"oldest 非布尔", validPin + ":oldest: maybe\n", `:oldest: "maybe" is not true or false`},
+		{"mainTitle 已移除", validPin + ":mainTitle: \\[Main\\]\n", `unknown key "mainTitle"`},
 		{"钉位规则不收 except", validPin + ":except: Finder\n", ":except: is not a key of a pin rule"},
 		{"边距缺 screen", ":margin: 66\n", ":screen_w: and :screen_h: are required"},
 		{"边距负数", ":screen_w: 1920\n:screen_h: 1280\n:margin: -1\n", "is negative"},

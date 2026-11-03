@@ -11,6 +11,7 @@
 package windowrules
 
 import (
+	"cmp"
 	"math"
 	"regexp"
 	"slices"
@@ -68,10 +69,13 @@ type Rule struct {
 	Width, Height Range
 	// Title, when set, keeps only windows whose title matches.
 	Title *regexp.Regexp
-	// MainTitle, when set and some window's title matches, keeps only the
-	// matching windows: Slack marks its main window "[Main]" during a
-	// huddle, and the huddle popup must not be pinned.
-	MainTitle *regexp.Regexp
+	// Oldest keeps only the app's oldest window, the one with the lowest
+	// CGWindowID. Slack adds "[Main]" to its main window's title only
+	// during a huddle, and a DM pop-out has the same title format as the
+	// main window, so no title tells them apart; but CGWindowIDs grow
+	// monotonically, and the main window, created at launch, has the
+	// lowest one.
+	Oldest bool
 	// FullScreenable keeps only windows with a full screen button, which
 	// tells a main window from settings windows of the same subrole.
 	FullScreenable bool
@@ -175,52 +179,37 @@ func LeftMarginFrame(rule MarginRule, avail, win Rect) (Rect, bool) {
 
 // SelectWindows returns the windows rule applies to, in order. Windows
 // without a full screen button (when FullScreenable) and windows whose
-// title does not match Title are dropped first; then, if some of the rest
-// match MainTitle, only those are kept, else all of the rest.
+// title does not match Title are dropped first; then, when Oldest is set,
+// only the standard window with the lowest CGWindowID is kept.
 func SelectWindows(rule Rule, wins []Window) []Window {
-	filtered := rule.FullScreenable || rule.Title != nil || rule.MainTitle != nil
+	filtered := rule.FullScreenable || rule.Title != nil || rule.Oldest
 	if !filtered {
 		return wins
 	}
-	var selected, main []Window
+	var selected []Window
 	for _, w := range wins {
 		if !passesFilters(rule, w.Info) {
 			continue
 		}
 		selected = append(selected, w)
-		if isMain(rule, w.Info) {
-			main = append(main, w)
-		}
 	}
-	if len(main) > 0 {
-		return main
+	if !rule.Oldest || len(selected) == 0 {
+		return selected
 	}
-	return selected
-}
-
-// HasMain reports whether one of infos passes rule's FullScreenable and
-// Title filters and matches its MainTitle: the window SelectWindows would
-// keep alone, had it been listed.
-func HasMain(rule Rule, infos []Info) bool {
-	for _, info := range infos {
-		if passesFilters(rule, info) && isMain(rule, info) {
-			return true
-		}
-	}
-	return false
+	oldest := slices.MinFunc(selected, func(a, b Window) int { return cmp.Compare(a.CG.ID, b.CG.ID) })
+	return []Window{oldest}
 }
 
 // passesFilters reports whether a window passes rule's FullScreenable and
-// Title filters.
+// Title filters and, when Oldest is set, is a standard window. Only
+// standard windows are compared by age, as AppWindows lists no other
+// kind, so an older dialog, or a window whose inspection failed, does not
+// keep the main window from being pinned.
 func passesFilters(rule Rule, info Info) bool {
 	passesFullScreen := !rule.FullScreenable || info.FullScreenButton
 	passesTitle := rule.Title == nil || rule.Title.MatchString(info.Title)
-	return passesFullScreen && passesTitle
-}
-
-// isMain reports whether a window's title matches rule's MainTitle.
-func isMain(rule Rule, info Info) bool {
-	return rule.MainTitle != nil && rule.MainTitle.MatchString(info.Title)
+	passesOldest := !rule.Oldest || info.Subrole == standardWindow
+	return passesFullScreen && passesTitle && passesOldest
 }
 
 // IsExcepted reports whether a margin rule leaves w alone: it is pinned

@@ -44,9 +44,14 @@ app's exact process name.
   inside the range is kept, one outside is clamped.
 - `:title:` is a regular expression (Go syntax); only windows whose title matches are
   pinned.
-- `:mainTitle:` is a regular expression: when some window's title matches it, only the
-  matching windows are pinned. Slack marks its main window `[Main]` during a huddle, so
-  the huddle popup is left alone.
+- `:oldest:` is `true` or `false`; with `true`, only the app's oldest window, the one with
+  the lowest CGWindowID, is pinned (after `:title:` and `:fullScreenable:`). That tells
+  Slack's main window, created at launch, from a DM pop-out or huddle window. The oldest
+  is looked up among the app's Accessibility windows, so while it is minimized or full
+  screen the app is left alone, as it is when Accessibility does not answer. A main window
+  in another Space is usually not seen at all, so a pop-out on the current Space may be
+  pinned then. Note that a main window reopened after closing is newer than a pop-out
+  that stayed open.
 - `:fullScreenable:` is `true` or `false`; with `true`, only windows with a full screen
   button are pinned, which tells a main window from settings windows.
 

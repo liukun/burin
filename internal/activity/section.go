@@ -29,25 +29,25 @@ func (t *Tracker) Items() []bar.Item {
 func (t *Tracker) menu(m *ui.Menu) {
 	now := time.Now()
 	s := t.Snapshot(now)
-	status := "活跃"
+	status := "Active"
 	if s.Status == Idle {
-		status = "空闲"
+		status = "Idle"
 	}
-	m.Item(fmt.Sprintf("状态: %s (%s)", status, FormatDuration(s.Elapsed))).Disabled(true)
+	m.Item(fmt.Sprintf("Status: %s (%s)", status, FormatDuration(s.Elapsed))).Disabled(true)
 	m.Separator()
-	m.Item("今日活跃: " + FormatDuration(s.TodayActive)).Disabled(true)
-	m.Item(fmt.Sprintf("今日工作周期: %d 次", s.Sessions)).Disabled(true)
+	m.Item("Active today: " + FormatDuration(s.TodayActive)).Disabled(true)
+	m.Item(fmt.Sprintf("Work sessions today: %d", s.Sessions)).Disabled(true)
 	m.Separator()
-	if m.Item("休息").Chosen() {
+	if m.Item("Take a break").Chosen() {
 		t.Rest(now)
 	}
-	if m.Item("重新计时").Chosen() {
+	if m.Item("Restart timer").Chosen() {
 		t.Restart(now)
 	}
-	if m.Item("测试提醒 (10秒后)").Chosen() {
+	if m.Item("Test reminder (in 10s)").Chosen() {
 		t.TestReminder(now)
 	}
-	if m.Item("重置今日统计...").Chosen() {
+	if m.Item("Reset today's stats...").Chosen() {
 		// The dialog waits for the user; the menu runs on the main thread.
 		go t.confirmResetToday()
 	}
@@ -57,9 +57,9 @@ func (t *Tracker) menu(m *ui.Menu) {
 func (t *Tracker) confirmResetToday() {
 	res, err := mygo.Dialog.Message(mygo.MessageOptions{
 		Type:               mygo.MessageWarning,
-		Title:              "重置今日统计",
-		Message:            "确定要清零今日活跃时间和工作周期吗？",
-		Buttons:            []string{"确定", "取消"},
+		Title:              "Reset today's stats",
+		Message:            "Clear today's active time and work sessions?",
+		Buttons:            []string{"Reset", "Cancel"},
 		CancelButton:       1,
 		DestructiveButtons: []int{0},
 	})

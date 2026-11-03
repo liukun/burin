@@ -54,7 +54,7 @@ order the bar shows them, after an optional switch before the first heading:
   earlier than the from crosses midnight (`22:00` to `02:00`); the same time for both
   speaks never.
 
-Without a `badges.md`, Slack, WhatsApp, Telegram and 微信 are shown. A file that is there
+Without a `badges.md`, Slack, WhatsApp and Telegram are shown. A file that is there
 but has no sections shows none. A section with an unknown key, a repeated key or a `:count_only:`,
 `:speak:` or `:windows:` other than `yes`, `no`, `true` or `false` is skipped, an `:enabled:` other than those
 leaves the badges on, and a `:speak_from:` or `:speak_until:` that is not a time, or is

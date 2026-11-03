@@ -58,7 +58,7 @@ func (as Apps) Match(name, bundle string) bool {
 
 // DefaultIdleApps are the apps whose use does not end a break without a
 // timer.md: checking a message while away is not coming back.
-var DefaultIdleApps = Apps{{Name: "微信"}, {Name: "WeChat"}, {Name: "Slack"}}
+var DefaultIdleApps = Apps{{Name: "WeChat"}, {Name: "Slack"}}
 
 // Settings is the result of loading timer.md.
 type Settings struct {

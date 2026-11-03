@@ -17,7 +17,7 @@ whose use does not end a break. See docs/timer.md.
 ## Slack
 :idle_app: yes
 
-## 微信
+## WeChat
 :idle_app: yes
 `
 
@@ -32,7 +32,7 @@ func TestParseExample(t *testing.T) {
 	if s.Config != DefaultConfig {
 		t.Errorf("config = %+v, want %+v", s.Config, DefaultConfig)
 	}
-	want := Apps{{Name: "Slack"}, {Name: "微信"}}
+	want := Apps{{Name: "Slack"}, {Name: "WeChat"}}
 	if !reflect.DeepEqual(s.IdleApps, want) {
 		t.Errorf("idle apps = %+v, want %+v", s.IdleApps, want)
 	}

@@ -8,5 +8,5 @@ at the top turns the timer off.
 ## Slack
 :idle_app: yes
 
-## 微信
+## WeChat
 :idle_app: yes

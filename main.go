@@ -923,8 +923,8 @@ func activityStore() *activity.Store {
 // notifications have no action buttons.
 func (b *burin) remindRest(elapsed time.Duration) {
 	n := mygo.NewNotification(mygo.NotificationOptions{
-		Title: "休息提醒 - 已工作 " + activity.FormatDuration(elapsed),
-		Body:  "起来活动一下吧！",
+		Title: "Break time: worked " + activity.FormatDuration(elapsed),
+		Body:  "Get up and move a little.",
 	})
 	n.OnClick(func() { b.activity.Rest(time.Now()) })
 	b.workNoticeMu.Lock()

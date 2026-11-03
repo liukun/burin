@@ -58,7 +58,7 @@ type App struct {
 }
 
 // DefaultApps are the apps whose badges show without a badges.md.
-var DefaultApps = []App{{Name: "Slack"}, {Name: "WhatsApp"}, {Name: "Telegram"}, {Name: "微信"}}
+var DefaultApps = []App{{Name: "Slack"}, {Name: "WhatsApp"}, {Name: "Telegram"}}
 
 // Set is the result of loading badges.md.
 type Set struct {

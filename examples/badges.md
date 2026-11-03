@@ -11,4 +11,3 @@ it cycles to the next window.
 ## Slack
 ## WhatsApp
 ## Telegram
-## 微信

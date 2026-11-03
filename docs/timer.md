@@ -41,7 +41,7 @@ between two colons at the start of the line, are fields; every other line is a c
   exactly against the app's name as the Dock shows it; with a `:bundle:` line (the bundle
   identifier) the heading is only a label.
 
-Without a `timer.md` the defaults apply, with 微信, WeChat and Slack not ending a break. A
+Without a `timer.md` the defaults apply, with WeChat and Slack not ending a break. A
 file that is there but has no sections has no such apps. An `:enabled:` other than `yes`,
 `no`, `true` or `false` leaves the timer on; an invalid or non-positive threshold keeps its
 default; a section with an unknown key or an `:idle_app:` other than `yes`, `no`, `true` or

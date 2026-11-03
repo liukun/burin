@@ -25,7 +25,6 @@ bar. See docs/badges.md.
 ## Slack
 ## WhatsApp
 ## Telegram
-## 微信
 `
 
 func TestParseExample(t *testing.T) {

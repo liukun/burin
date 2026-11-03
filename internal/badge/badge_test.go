@@ -1,15 +1,22 @@
 package badge
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+
+	"burin/internal/workspace"
 )
 
 const exampleBadges = `Badge apps: one "## " section per app whose Dock badge shows on the
@@ -118,6 +125,31 @@ func TestParseSpeak(t *testing.T) {
 	}
 }
 
+func TestParseWindows(t *testing.T) {
+	data := `## Yes
+:windows: yes
+## True
+:windows: true
+## No
+:windows: no
+## False
+:windows: false
+## Unset
+## Bad
+:windows: maybe
+## Empty
+:windows:
+`
+	s := Parse(data)
+	want := []App{{Name: "Yes", Windows: true}, {Name: "True", Windows: true}, {Name: "No"}, {Name: "False"}, {Name: "Unset"}}
+	if !reflect.DeepEqual(s.Apps, want) {
+		t.Errorf("apps = %+v, want %+v", s.Apps, want)
+	}
+	if len(s.Errors) != 2 {
+		t.Errorf("errors = %v, want 2", s.Errors)
+	}
+}
+
 func TestParseSpeakWindow(t *testing.T) {
 	tests := []struct {
 		data        string
@@ -215,6 +247,20 @@ type fakeDock struct {
 	// iconFails makes drawing an icon fail.
 	iconFails bool
 	opened    []string
+	// running are the running apps, unanswered makes listing them fail,
+	// and listed counts the listings. windows are the standard window
+	// counts by pid, and windowErr makes counting fail.
+	running    []workspace.App
+	unanswered bool
+	listed     int
+	windows    map[int32]int
+	windowErr  error
+	counted    int
+	// cycled records every raise and activation in order, as "raise 20"
+	// and "activate 20", and activated receives the pid of every
+	// activation, the last step of a click.
+	cycled    []string
+	activated chan int32
 }
 
 func newTestWatcher(d *fakeDock) *Watcher {
@@ -224,7 +270,15 @@ func newTestWatcher(d *fakeDock) *Watcher {
 		defer d.mu.Unlock()
 		return d.labels, d.err
 	}
-	w.running = func() map[string]string { return nil }
+	w.runningApps = func() ([]workspace.App, bool) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.listed++
+		if d.unanswered {
+			return nil, false
+		}
+		return d.running, true
+	}
 	w.icon = func(string, string) (ui.ImageSource, error) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
@@ -238,6 +292,27 @@ func newTestWatcher(d *fakeDock) *Watcher {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		d.opened = append(d.opened, name)
+		return nil
+	}
+	w.windows = func(pid int32) (int, error) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.counted++
+		return d.windows[pid], d.windowErr
+	}
+	w.activate = func(pid int32) bool {
+		d.mu.Lock()
+		d.cycled = append(d.cycled, fmt.Sprintf("activate %d", pid))
+		d.mu.Unlock()
+		if d.activated != nil {
+			d.activated <- pid
+		}
+		return true
+	}
+	w.raise = func(pid int32) error {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.cycled = append(d.cycled, fmt.Sprintf("raise %d", pid))
 		return nil
 	}
 	return w
@@ -349,5 +424,250 @@ func TestWatcherRetriesFailedIcons(t *testing.T) {
 	w.poll()
 	if changes != 1 || d.icons != 2 {
 		t.Errorf("changes = %d, icons drawn %d times after a poll with the same badge, want 1 and 2", changes, d.icons)
+	}
+}
+
+func TestWatcherWindowItems(t *testing.T) {
+	d := &fakeDock{
+		labels:    map[string]DockIcon{"Slack": {Label: "3"}},
+		running:   []workspace.App{{Name: "Slack", PID: 10}, {Name: "Notes", PID: 20}, {Name: "Mail", PID: 30}},
+		windows:   map[int32]int{10: 2, 20: 3, 30: 1},
+		activated: make(chan int32, 1),
+	}
+	w := newTestWatcher(d)
+	changes := 0
+	w.OnChange = func() { changes++ }
+	w.SetApps([]App{{Name: "Notes", Windows: true}, {Name: "Slack", Windows: true}, {Name: "Mail", Windows: true}, {Name: "Gone", Windows: true}})
+	w.poll()
+	if changes != 1 {
+		t.Fatalf("changes = %d after the first poll, want 1", changes)
+	}
+	// Notes has only its window item, in its place; Slack's follows its
+	// badge; Mail with one window and Gone, not running, have none.
+	items := w.Items()
+	var got []string
+	for _, it := range items {
+		got = append(got, it.Text+" "+it.Tooltip)
+	}
+	want := []string{"⧉ Notes: 3 windows", "3 Slack", "⧉ Slack: 2 windows"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("items = %q, want %q", got, want)
+	}
+	if items[0].Icon == nil || items[2].Icon == nil {
+		t.Error("window items have no icon")
+	}
+	// Badges leaves out Notes, which has no badge.
+	if badges := w.Badges(); len(badges) != 1 || badges[0].Name != "Slack" {
+		t.Errorf("Badges = %+v, want only Slack", badges)
+	}
+
+	// A click raises the app's next window by pid, then activates the
+	// app: were it activated first, the activation could undo the raise.
+	items[0].OnClick()
+	select {
+	case <-d.activated:
+	case <-time.After(time.Second):
+		t.Fatal("the click activated nothing")
+	}
+	d.mu.Lock()
+	cycled := slices.Clone(d.cycled)
+	d.mu.Unlock()
+	if want := []string{"raise 20", "activate 20"}; !reflect.DeepEqual(cycled, want) {
+		t.Errorf("the click did %q, want %q", cycled, want)
+	}
+
+	w.poll()
+	if changes != 1 {
+		t.Errorf("changes = %d with the same counts, want still 1", changes)
+	}
+	d.mu.Lock()
+	d.windows = map[int32]int{10: 2, 20: 4, 30: 1}
+	d.mu.Unlock()
+	w.poll()
+	if changes != 2 {
+		t.Errorf("changes = %d after a count changed, want 2", changes)
+	}
+	// Below minWindows the item goes, and so does a change of count there.
+	d.mu.Lock()
+	d.windows = map[int32]int{10: 2, 20: 1, 30: 0}
+	d.mu.Unlock()
+	w.poll()
+	if changes != 3 || len(w.Items()) != 2 {
+		t.Errorf("changes = %d, items = %+v after Notes dropped to one window, want 3 and two items", changes, w.Items())
+	}
+	// Counts changing only below minWindows change no item.
+	d.mu.Lock()
+	d.windows = map[int32]int{10: 2, 20: 0, 30: 1}
+	d.mu.Unlock()
+	w.poll()
+	if changes != 3 {
+		t.Errorf("changes = %d after counts changed only below %d, want still 3", changes, minWindows)
+	}
+}
+
+func TestWatcherWindowErrorLoggedOnce(t *testing.T) {
+	logged := captureLog(t)
+	d := &fakeDock{
+		running:   []workspace.App{{Name: "Slack", PID: 10}},
+		windows:   map[int32]int{10: 2},
+		windowErr: errors.New("no Accessibility"),
+	}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Slack", Windows: true}})
+	w.poll()
+	w.poll()
+	if got := strings.Count(logged.String(), "no Accessibility"); got != 1 {
+		t.Fatalf("logged %q after two failed counts, want the failure once", logged.String())
+	}
+	// A success forgets the failure, so its return is logged again.
+	d.mu.Lock()
+	d.windowErr = nil
+	d.mu.Unlock()
+	w.poll()
+	d.mu.Lock()
+	d.windowErr = errors.New("no Accessibility")
+	d.mu.Unlock()
+	w.poll()
+	if got := strings.Count(logged.String(), "no Accessibility"); got != 2 {
+		t.Errorf("logged %q after a success and a failure again, want the failure twice", logged.String())
+	}
+}
+
+func TestWatcherListsRunningAppsOncePerPoll(t *testing.T) {
+	d := &fakeDock{
+		labels:  map[string]DockIcon{"Chat Pro": {Label: "1"}},
+		running: []workspace.App{{Name: "Chat Pro", BundleID: "com.example.chat", PID: 40}, {Name: "Notes", PID: 20}},
+		windows: map[int32]int{20: 2, 40: 2},
+	}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Chat", Bundle: "com.example.chat"}, {Name: "Notes", Windows: true}})
+	w.poll()
+	if d.listed != 1 {
+		t.Errorf("running apps listed %d times in one poll, want 1", d.listed)
+	}
+}
+
+func TestRunningOfKeepsFirstDuplicate(t *testing.T) {
+	r := runningOf([]workspace.App{
+		{Name: "Chat", BundleID: "com.example.chat", PID: 1},
+		{Name: "Chat Helper", BundleID: "com.example.chat", PID: 2},
+	})
+	// The name and the pid by bundle come from the same app.
+	if r.names["com.example.chat"] != "Chat" || r.pidsByBundle["com.example.chat"] != 1 {
+		t.Errorf("runningOf = %+v, want Chat, pid 1 for the bundle", r)
+	}
+}
+
+func TestWatcherKeepsWindowsWhenRunningUnanswered(t *testing.T) {
+	logged := captureLog(t)
+	d := &fakeDock{
+		running: []workspace.App{{Name: "Slack", PID: 10}},
+		windows: map[int32]int{10: 2},
+	}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Slack", Windows: true}})
+	w.poll()
+	d.mu.Lock()
+	d.unanswered = true
+	d.mu.Unlock()
+	w.poll()
+	w.poll()
+	if items := w.Items(); len(items) != 1 || items[0].Text != windowsText {
+		t.Errorf("items = %+v with the running apps unanswered, want Slack's window item kept", items)
+	}
+	if got := strings.Count(logged.String(), "did not answer"); got != 1 {
+		t.Fatalf("logged %q after two unanswered polls, want the failure once", logged.String())
+	}
+	// An answer forgets the failure, so its return is logged again.
+	d.mu.Lock()
+	d.unanswered = false
+	d.mu.Unlock()
+	w.poll()
+	d.mu.Lock()
+	d.unanswered = true
+	d.mu.Unlock()
+	w.poll()
+	if got := strings.Count(logged.String(), "did not answer"); got != 2 {
+		t.Errorf("logged %q after an answer and a failure again, want the failure twice", logged.String())
+	}
+}
+
+// captureLog sends the log to the returned buffer until the test ends.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
+	return &logged
+}
+
+func TestWatcherWindowsOnlyForWindowsApps(t *testing.T) {
+	d := &fakeDock{
+		running: []workspace.App{{Name: "Slack", PID: 10}, {Name: "Chat Pro", BundleID: "com.example.chat", PID: 40}},
+		windows: map[int32]int{10: 2, 40: 2},
+	}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Slack"}, {Name: "Chat", Bundle: "com.example.chat", Windows: true}})
+	w.poll()
+	items := w.Items()
+	// Slack's windows are not counted, and Chat is found by its bundle
+	// and named as it runs.
+	if len(items) != 1 || items[0].Tooltip != "Chat Pro: 2 windows" {
+		t.Errorf("items = %+v, want Chat Pro's window item", items)
+	}
+	if d.counted != 1 {
+		t.Errorf("windows counted %d times, want 1", d.counted)
+	}
+}
+
+func TestWatcherWindowCountFailureIsNone(t *testing.T) {
+	d := &fakeDock{
+		running:   []workspace.App{{Name: "Slack", PID: 10}},
+		windows:   map[int32]int{10: 2},
+		windowErr: errors.New("no Accessibility"),
+	}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Slack", Windows: true}})
+	w.poll()
+	if items := w.Items(); len(items) != 0 {
+		t.Errorf("items = %+v after a failed count, want none", items)
+	}
+}
+
+func TestWatcherWindowsSurviveFailedDockRead(t *testing.T) {
+	d := &fakeDock{
+		err:     errors.New("no Dock"),
+		running: []workspace.App{{Name: "Slack", PID: 10}},
+		windows: map[int32]int{10: 2},
+	}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Slack", Windows: true}})
+	w.poll()
+	if items := w.Items(); len(items) != 1 || items[0].Text != windowsText {
+		t.Errorf("items = %+v after a failed Dock read, want Slack's window item", items)
+	}
+}
+
+func TestWatcherStaleCountsSkipAppsWithoutWindows(t *testing.T) {
+	d := &fakeDock{
+		running: []workspace.App{{Name: "Slack", PID: 10}},
+		windows: map[int32]int{10: 2},
+	}
+	w := newTestWatcher(d)
+	w.SetApps([]App{{Name: "Slack", Windows: true}, {Name: "Notes", Windows: true}})
+	w.poll()
+	// A reload takes Slack's :windows: away while the running apps go
+	// unanswered, so the counts kept from before still hold Slack's.
+	d.mu.Lock()
+	d.unanswered = true
+	d.mu.Unlock()
+	w.SetApps([]App{{Name: "Slack"}, {Name: "Notes", Windows: true}})
+	w.poll()
+	if items := w.Items(); len(items) != 0 {
+		t.Errorf("items = %+v after Slack's :windows: was removed, want none", items)
 	}
 }

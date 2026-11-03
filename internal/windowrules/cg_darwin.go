@@ -51,6 +51,7 @@ var (
 	kCGWindowLayer     uintptr
 	kCGWindowNumber    uintptr
 	kCFBooleanTrue     uintptr
+	kCFBooleanFalse    uintptr
 
 	loadOnce sync.Once
 )
@@ -103,6 +104,7 @@ func load() {
 		kCGWindowLayer = globalValue(cg, "kCGWindowLayer")
 		kCGWindowNumber = globalValue(cg, "kCGWindowNumber")
 		kCFBooleanTrue = globalValue(cf, "kCFBooleanTrue")
+		kCFBooleanFalse = globalValue(cf, "kCFBooleanFalse")
 		loadAX(as)
 	})
 }

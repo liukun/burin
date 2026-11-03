@@ -16,6 +16,7 @@ order the bar shows them, after an optional switch before the first heading:
 ## Slack
 :count_only: yes
 :speak: yes
+:windows: yes
 
 ## WhatsApp
 ## Telegram
@@ -43,18 +44,24 @@ order the bar shows them, after an optional switch before the first heading:
   breath. A dot is not spoken. The count is spoken again every minute while the break and the badge last, even
   if it has not changed, so a message that came in as you stepped away still reaches you.
   The default is `no`.
+- `:windows: yes` shows a `⧉` item with the app's icon while the app has two or more
+  standard windows, minimized ones included (hover it to see how many), right after the
+  app's badge or, without one, in the app's place. It comes and goes with the windows,
+  whatever the badge shows. Click it to bring the app to the front with its next window
+  raised, so clicks cycle through them. The default is `no`.
 - `:speak_from:` and `:speak_until:`, before the first heading, are the time of day counts
   may be spoken, as `HH:MM` on a 24-hour clock: 10:00 and 22:00 by default. An until
   earlier than the from crosses midnight (`22:00` to `02:00`); the same time for both
   speaks never.
 
 Without a `badges.md`, Slack, WhatsApp, Telegram and 微信 are shown. A file that is there
-but has no sections shows none. A section with an unknown key, a repeated key or a `:count_only:`
-or `:speak:` other than `yes`, `no`, `true` or `false` is skipped, an `:enabled:` other than those
+but has no sections shows none. A section with an unknown key, a repeated key or a `:count_only:`,
+`:speak:` or `:windows:` other than `yes`, `no`, `true` or `false` is skipped, an `:enabled:` other than those
 leaves the badges on, and a `:speak_from:` or `:speak_until:` that is not a time, or is
 repeated, keeps its default; all are counted as errors in the tray, which shows `Badges off` while the badges are off. The file is watched, and the tray's Reload rereads it too; a change
 shows at the next read.
 
 The badges are read from the Dock through Accessibility every 2 seconds, so they need
 Accessibility permission, which burin asks for anyway, and appear up to 2 seconds after
-the Dock shows them.
+the Dock shows them. The windows of a `:windows:` app are counted through Accessibility at
+the same time, so the window item shows up to 2 seconds after the second window opens.

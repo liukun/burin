@@ -27,10 +27,11 @@ const (
 	keyBundle     = "bundle"
 	keyCountOnly  = "count_only"
 	keySpeak      = "speak"
+	keyWindows    = "windows"
 )
 
 // sectionKeys are the keys a section may have.
-var sectionKeys = map[string]bool{keyBundle: true, keyCountOnly: true, keySpeak: true}
+var sectionKeys = map[string]bool{keyBundle: true, keyCountOnly: true, keySpeak: true, keyWindows: true}
 
 // The speak window without a badges.md, or without its keys, in minutes
 // since midnight: 10:00 to 22:00.
@@ -45,12 +46,15 @@ const clockLayout = "15:04"
 // App is an app whose badge shows: by its title in the Dock, or with
 // Bundle by its bundle identifier. With CountOnly a badge without a
 // count, the dot an app shows for unread activity, is not shown. With
-// Speak its count is spoken during a break.
+// Speak its count is spoken during a break. With Windows an item shows
+// while the app has two or more standard windows, and a click on it
+// brings the next one to the front.
 type App struct {
 	Name      string
 	Bundle    string
 	CountOnly bool
 	Speak     bool
+	Windows   bool
 }
 
 // DefaultApps are the apps whose badges show without a badges.md.
@@ -100,8 +104,9 @@ func Load(path string) Set {
 // Parse reads a badges.md file: each "## " heading names an app, in the
 // order the bar shows them, as the Dock titles it, or with a ":bundle:"
 // line by its bundle identifier; a ":count_only: yes" line hides its
-// badge when it is a dot and not a count, and a ":speak: yes" line speaks
-// its count during a break. An ":enabled: no" (or "false") line
+// badge when it is a dot and not a count, a ":speak: yes" line speaks
+// its count during a break, and a ":windows: yes" line shows an item that
+// cycles through its windows while it has two or more. An ":enabled: no" (or "false") line
 // before the first heading turns the badges off; a missing or invalid
 // one leaves them on. ":speak_from:" and ":speak_until:" lines there set
 // the speak window, the default for a missing or invalid one. A section that fails to parse is skipped and
@@ -158,8 +163,8 @@ func (s *Set) clock(data, key string, def int) int {
 }
 
 // parseApp reads a section: the app it names, by bundle identifier
-// with ":bundle:", whether only a count of its badge shows, and whether
-// its count is spoken.
+// with ":bundle:", whether only a count of its badge shows, whether its
+// count is spoken, and whether its windows are cycled.
 func parseApp(sec snippet.Snippet) (App, error) {
 	values, err := field.Section(sec.Content, sectionKeys)
 	if err != nil {
@@ -176,6 +181,9 @@ func parseApp(sec snippet.Snippet) (App, error) {
 		return App{}, err
 	}
 	if app.Speak, err = boolField(values, keySpeak); err != nil {
+		return App{}, err
+	}
+	if app.Windows, err = boolField(values, keyWindows); err != nil {
 		return App{}, err
 	}
 	return app, nil

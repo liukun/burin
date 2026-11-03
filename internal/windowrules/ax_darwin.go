@@ -5,6 +5,7 @@ package windowrules
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -42,7 +43,7 @@ var (
 	// macros, not exported symbols.
 	attrWindows, attrSubrole, attrMinimized, attrFullScreen uintptr
 	attrFullScreenButton, attrTitle, attrPosition, attrSize uintptr
-	attrCloseButton, actionPress                            uintptr
+	attrCloseButton, attrMain, actionPress, actionRaise     uintptr
 )
 
 // loadAX registers the Accessibility functions from ApplicationServices.
@@ -66,7 +67,9 @@ func loadAX(as uintptr) {
 	attrPosition = cfStringCreate("AXPosition")
 	attrSize = cfStringCreate("AXSize")
 	attrCloseButton = cfStringCreate("AXCloseButton")
+	attrMain = cfStringCreate("AXMain")
 	actionPress = cfStringCreate("AXPress")
+	actionRaise = cfStringCreate("AXRaise")
 }
 
 // axSession asks Accessibility about windows during one round. It looks
@@ -188,25 +191,109 @@ func (s *axSession) AppWindows(pid int32) ([]Info, error) {
 func CloseStandardWindows(pid int32) (closed int, err error) {
 	session := newAXSession()
 	defer session.close()
-	a := session.app(pid)
-	if a.err != nil {
-		return 0, a.err
+	windows, err := session.standardWindows(pid)
+	if err != nil {
+		return 0, err
 	}
-	n := cfArrayGetCount(a.windows)
-	for i := range n {
-		el := a.window(i)
-		if stringAttr(el, attrSubrole) != standardWindow {
-			continue
-		}
+	for i, el := range windows {
 		if pressErr := pressClose(el); pressErr != nil {
 			if err == nil {
-				err = fmt.Errorf("pid %d window %d of %d: %w", pid, i+1, n, pressErr)
+				err = fmt.Errorf("pid %d window %d of %d: %w", pid, i+1, len(windows), pressErr)
 			}
 			continue
 		}
 		closed++
 	}
 	return closed, err
+}
+
+// CountStandardWindows returns how many standard windows the app of pid
+// has, minimized ones included, as AXWindows lists those too. It runs on
+// the calling goroutine, like the rest of the package's Accessibility
+// calls.
+func CountStandardWindows(pid int32) (int, error) {
+	session := newAXSession()
+	defer session.close()
+	windows, err := session.standardWindows(pid)
+	if err != nil {
+		return 0, err
+	}
+	return len(windows), nil
+}
+
+// RaiseNextWindow brings the app's next standard window to the front:
+// the standard windows are taken in the order of their CGWindowIDs, and
+// the one after the main window's, wrapping around, or the first when
+// none is main, is un-minimized, raised and made main. The order is the
+// IDs' rather than AXWindows', which is front to back: there the raised
+// window would become the first and the old main the second, so clicks
+// would only swap the two frontmost windows. A window without a
+// CGWindowID cannot be placed in that order and is left out. With fewer
+// than two windows to cycle there is nothing to cycle to, and it does
+// nothing. It runs on the calling goroutine, like the rest of the
+// package's Accessibility calls.
+func RaiseNextWindow(pid int32) error {
+	if axUIElementGetWindow == nil {
+		return errors.New("window IDs are unavailable: no _AXUIElementGetWindow")
+	}
+	session := newAXSession()
+	defer session.close()
+	windows, err := session.standardWindows(pid)
+	if err != nil {
+		return err
+	}
+	byID := make(map[uint32]uintptr, len(windows))
+	ids := make([]uint32, 0, len(windows))
+	var mainID uint32
+	for _, el := range windows {
+		var id uint32
+		if axUIElementGetWindow(el, &id) != axErrorSuccess || id == 0 {
+			continue
+		}
+		byID[id] = el
+		ids = append(ids, id)
+		if boolAttr(el, attrMain) {
+			mainID = id
+		}
+	}
+	slices.Sort(ids)
+	next := nextWindowID(mainID, ids)
+	if next == 0 {
+		return nil
+	}
+	el := byID[next]
+	// AXRaise leaves a minimized window in the Dock, so it is restored
+	// first.
+	if boolAttr(el, attrMinimized) {
+		if code := axUIElementSetAttributeValue(el, attrMinimized, kCFBooleanFalse); code != axErrorSuccess {
+			return fmt.Errorf("pid %d window %d: unset AXMinimized: AXError %d", pid, next, code)
+		}
+	}
+	if code := axUIElementPerformAction(el, actionRaise); code != axErrorSuccess {
+		return fmt.Errorf("pid %d window %d: AXRaise: AXError %d", pid, next, code)
+	}
+	if code := axUIElementSetAttributeValue(el, attrMain, kCFBooleanTrue); code != axErrorSuccess {
+		return fmt.Errorf("pid %d window %d: set AXMain: AXError %d", pid, next, code)
+	}
+	return nil
+}
+
+// standardWindows returns the elements of the app's standard windows, in
+// the order of its AXWindows; the session owns them.
+func (s *axSession) standardWindows(pid int32) ([]uintptr, error) {
+	a := s.app(pid)
+	if a.err != nil {
+		return nil, a.err
+	}
+	n := cfArrayGetCount(a.windows)
+	var windows []uintptr
+	for i := range n {
+		el := a.window(i)
+		if stringAttr(el, attrSubrole) == standardWindow {
+			windows = append(windows, el)
+		}
+	}
+	return windows, nil
 }
 
 // pressClose presses the close button of a window element.

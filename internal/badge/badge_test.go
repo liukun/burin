@@ -47,14 +47,23 @@ func TestParseSections(t *testing.T) {
 :bundle: b
 ## Mail
 a comment line
+## Counted
+:count_only: yes
+## Dotted
+:count_only: no
+## Bad count
+:count_only: maybe
+## Counted twice
+:count_only: yes
+:count_only: yes
 `
 	s := Parse(data)
-	want := []App{{Name: "Slack"}, {Name: "Chat", Bundle: "com.example.chat"}, {Name: "Mail"}}
+	want := []App{{Name: "Slack"}, {Name: "Chat", Bundle: "com.example.chat"}, {Name: "Mail"}, {Name: "Counted", CountOnly: true}, {Name: "Dotted"}}
 	if !reflect.DeepEqual(s.Apps, want) {
 		t.Errorf("apps = %+v, want %+v", s.Apps, want)
 	}
-	if len(s.Errors) != 3 {
-		t.Errorf("errors = %v, want 3", s.Errors)
+	if len(s.Errors) != 5 {
+		t.Errorf("errors = %v, want 5", s.Errors)
 	}
 }
 
@@ -124,6 +133,13 @@ func TestMatch(t *testing.T) {
 	want := []Badge{{"Telegram", "3", ""}, {"Slack", "•", "/Applications/Slack.app"}, {"Chat Pro", "1", ""}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("match = %+v, want %+v", got, want)
+	}
+	// A count_only app shows a count, not a dot.
+	counted := []App{{Name: "Slack", CountOnly: true}, {Name: "Telegram", CountOnly: true}, {Name: "Chat", CountOnly: true}}
+	countIcons := map[string]DockIcon{"Slack": {Label: "•"}, "Telegram": {Label: "3"}, "Chat": {Label: "99+"}}
+	wantCounted := []Badge{{"Telegram", "3", ""}, {"Chat", "99+", ""}}
+	if got := match(counted, countIcons, nil); !reflect.DeepEqual(got, wantCounted) {
+		t.Errorf("match of count_only apps = %+v, want %+v", got, wantCounted)
 	}
 	// A bundle with no running app matches nothing, not the app with
 	// no name.

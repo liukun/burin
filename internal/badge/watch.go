@@ -3,8 +3,10 @@ package badge
 import (
 	"log"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -272,7 +274,8 @@ func (w *Watcher) activate(name string) {
 // match returns the badges of apps, in their order, from the Dock icons
 // by title in icons. An app with a bundle identifier is found by the
 // name of the running app with it, in bundles; an app without a badge,
-// or named twice, is left out.
+// or named twice, is left out, as is a count-only app whose badge is
+// not a count.
 func match(apps []App, icons map[string]DockIcon, bundles map[string]string) []Badge {
 	var badges []Badge
 	seen := map[string]bool{}
@@ -282,7 +285,8 @@ func match(apps []App, icons map[string]DockIcon, bundles map[string]string) []B
 			name = bundles[a.Bundle]
 		}
 		icon := icons[name]
-		skip := name == "" || icon.Label == "" || seen[name]
+		dotHidden := a.CountOnly && !isCount(icon.Label)
+		skip := name == "" || icon.Label == "" || seen[name] || dotHidden
 		if skip {
 			continue
 		}
@@ -290,6 +294,12 @@ func match(apps []App, icons map[string]DockIcon, bundles map[string]string) []B
 		badges = append(badges, Badge{Name: name, Label: icon.Label, Path: icon.Path})
 	}
 	return badges
+}
+
+// isCount reports whether a badge's label is a count rather than a dot:
+// it has a digit, as a count such as "99+" may not be all digits.
+func isCount(label string) bool {
+	return strings.ContainsFunc(label, unicode.IsDigit)
 }
 
 // anyBundle reports whether an app is named by its bundle identifier.

@@ -18,18 +18,24 @@ import (
 // FileName is the badge apps file in the config directory.
 const FileName = "badges.md"
 
-// Keys of badges.md: enabled before the first heading, bundle in a
+// Keys of badges.md: enabled before the first heading, the rest in a
 // section.
 const (
-	keyEnabled = "enabled"
-	keyBundle  = "bundle"
+	keyEnabled   = "enabled"
+	keyBundle    = "bundle"
+	keyCountOnly = "count_only"
 )
 
+// sectionKeys are the keys a section may have.
+var sectionKeys = map[string]bool{keyBundle: true, keyCountOnly: true}
+
 // App is an app whose badge shows: by its title in the Dock, or with
-// Bundle by its bundle identifier.
+// Bundle by its bundle identifier. With CountOnly a badge without a
+// count, the dot an app shows for unread activity, is not shown.
 type App struct {
-	Name   string
-	Bundle string
+	Name      string
+	Bundle    string
+	CountOnly bool
 }
 
 // DefaultApps are the apps whose badges show without a badges.md.
@@ -73,7 +79,8 @@ func Load(path string) Set {
 
 // Parse reads a badges.md file: each "## " heading names an app, in the
 // order the bar shows them, as the Dock titles it, or with a ":bundle:"
-// line by its bundle identifier. An ":enabled: no" (or "false") line
+// line by its bundle identifier; a ":count_only: yes" line hides its
+// badge when it is a dot and not a count. An ":enabled: no" (or "false") line
 // before the first heading turns the badges off; a missing or invalid
 // one leaves them on. A section that fails to parse is skipped and
 // reported. A file that fails to parse as a whole has the
@@ -106,24 +113,36 @@ func (s *Set) enabled(data string) bool {
 	return enabled
 }
 
+// parseApp reads a section: the app it names, by bundle identifier
+// with ":bundle:", and whether only a count of its badge shows.
 func parseApp(sec snippet.Snippet) (App, error) {
-	app := App{Name: sec.Keyword}
-	hasBundle := false
+	values := map[string]string{}
 	for line := range strings.Lines(sec.Content) {
 		key, value, ok := field.Parse(strings.TrimSpace(line))
 		if !ok {
 			continue
 		}
-		if key != keyBundle {
+		if !sectionKeys[key] {
 			return App{}, fmt.Errorf("unknown key %q", key)
 		}
-		if hasBundle {
+		if _, seen := values[key]; seen {
 			return App{}, fmt.Errorf("duplicate :%s:", key)
 		}
-		if value == "" {
+		values[key] = value
+	}
+	app := App{Name: sec.Keyword}
+	if bundle, ok := values[keyBundle]; ok {
+		if bundle == "" {
 			return App{}, errors.New(":bundle: needs a bundle identifier")
 		}
-		app.Bundle, hasBundle = value, true
+		app.Bundle = bundle
+	}
+	if v, ok := values[keyCountOnly]; ok {
+		countOnly, err := field.ParseBool(keyCountOnly, v)
+		if err != nil {
+			return App{}, err
+		}
+		app.CountOnly = countOnly
 	}
 	return app, nil
 }

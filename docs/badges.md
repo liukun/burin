@@ -17,6 +17,9 @@ order the bar shows them, after an optional switch before the first heading:
 
 ## Chat
 :bundle: com.example.chat
+
+## Discord
+:count_only: yes
 ```
 
 - `:enabled:` turns the badges on or off: `yes` or `true` (the default), `no` or `false`.
@@ -26,11 +29,14 @@ order the bar shows them, after an optional switch before the first heading:
   icon in the Dock to see it).
 - With a `:bundle:` line (the bundle identifier) the heading is only a label, and the
   badge is the one of the running app with that identifier.
+- `:count_only: yes` hides the app's badge while it is a dot rather than a count, so the
+  app only shows with a number. Slack and Discord badge a dot for unread channel messages
+  and a number for direct messages and mentions, so this keeps the ones meant for you.
 
 Without a `badges.md`, Slack, WhatsApp, Telegram and 微信 are shown. A file that is there
-but has no sections shows none. A section with an unknown key is skipped, and an `:enabled:`
-other than `yes`, `no`, `true` or `false` leaves the badges on; both are counted as errors in
-the tray, which shows `Badges off` while the badges are off. The file is watched, and the tray's Reload rereads it too; a change
+but has no sections shows none. A section with an unknown key, a repeated key or a `:count_only:`
+other than `yes`, `no`, `true` or `false` is skipped, and an `:enabled:` other than those
+leaves the badges on; all are counted as errors in the tray, which shows `Badges off` while the badges are off. The file is watched, and the tray's Reload rereads it too; a change
 shows at the next read.
 
 The badges are read from the Dock through Accessibility every 2 seconds, so they need

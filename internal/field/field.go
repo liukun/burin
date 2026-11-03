@@ -107,3 +107,59 @@ func Bool(value string) (b, ok bool) {
 	}
 	return false, false
 }
+
+// Section reads the fields of content, the lines of a "## " section:
+// the value of each key, which must be in known, else the error, as is
+// a key that repeats. Lines are trimmed, so they may be indented, and
+// lines that are not a field are a comment.
+func Section(content string, known map[string]bool) (map[string]string, error) {
+	values := map[string]string{}
+	err := eachField(content, known, func(key, value string) error {
+		if _, seen := values[key]; seen {
+			return fmt.Errorf("duplicate :%s:", key)
+		}
+		values[key] = value
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+// SectionLists reads the fields of content as Section does, but a key
+// in repeatable may repeat, so each key has every value it was given,
+// in order.
+func SectionLists(content string, known, repeatable map[string]bool) (map[string][]string, error) {
+	values := map[string][]string{}
+	err := eachField(content, known, func(key, value string) error {
+		_, seen := values[key]
+		if seen && !repeatable[key] {
+			return fmt.Errorf("duplicate :%s:", key)
+		}
+		values[key] = append(values[key], value)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+// eachField calls fn with each field line of content, trimmed, stopping
+// at a key not in known or at fn's first error.
+func eachField(content string, known map[string]bool, fn func(key, value string) error) error {
+	for line := range strings.Lines(content) {
+		key, value, ok := Parse(strings.TrimSpace(line))
+		if !ok {
+			continue
+		}
+		if !known[key] {
+			return fmt.Errorf("unknown key %q", key)
+		}
+		if err := fn(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}

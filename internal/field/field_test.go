@@ -127,3 +127,33 @@ func TestPreambleBool(t *testing.T) {
 		}
 	}
 }
+
+func TestSection(t *testing.T) {
+	known := map[string]bool{"after": true, "bundle": true}
+	content := "a comment\n  :after: 30m\n:bundle:\n"
+	values, err := Section(content, known)
+	if err != nil || len(values) != 2 || values["after"] != "30m" || values["bundle"] != "" {
+		t.Errorf("Section = %v, %v; want after 30m and an empty bundle", values, err)
+	}
+	if _, err := Section(":after: 1m\n:after: 2m\n", known); err == nil || err.Error() != "duplicate :after:" {
+		t.Errorf("repeated key: err = %v, want duplicate :after:", err)
+	}
+	if _, err := Section(":path: x\n", known); err == nil || err.Error() != `unknown key "path"` {
+		t.Errorf("unknown key: err = %v, want unknown key \"path\"", err)
+	}
+}
+
+func TestSectionLists(t *testing.T) {
+	known := map[string]bool{"margin": true, "except": true}
+	repeatable := map[string]bool{"except": true}
+	values, err := SectionLists(":margin: 8\n:except: A\n:except: B\n", known, repeatable)
+	if err != nil || len(values) != 2 || len(values["except"]) != 2 || values["except"][1] != "B" || values["margin"][0] != "8" {
+		t.Errorf("SectionLists = %v, %v; want margin [8] and except [A B]", values, err)
+	}
+	if _, err := SectionLists(":margin: 8\n:margin: 9\n", known, repeatable); err == nil || err.Error() != "duplicate :margin:" {
+		t.Errorf("repeated key: err = %v, want duplicate :margin:", err)
+	}
+	if _, err := SectionLists(":title: x\n", known, repeatable); err == nil {
+		t.Error("unknown key: err = nil, want an error")
+	}
+}

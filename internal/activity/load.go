@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"strings"
 	"time"
 
 	"burin/internal/field"
@@ -165,19 +164,9 @@ func (s *Settings) enabled(data string) bool {
 // parseApp reads a section: the app it names and whether its use counts
 // as a break.
 func parseApp(sec snippet.Snippet) (App, bool, error) {
-	values := map[string]string{}
-	for line := range strings.Lines(sec.Content) {
-		key, value, ok := field.Parse(strings.TrimSpace(line))
-		if !ok {
-			continue
-		}
-		if !sectionKeys[key] {
-			return App{}, false, fmt.Errorf("unknown key %q", key)
-		}
-		if _, seen := values[key]; seen {
-			return App{}, false, fmt.Errorf("duplicate :%s:", key)
-		}
-		values[key] = value
+	values, err := field.Section(sec.Content, sectionKeys)
+	if err != nil {
+		return App{}, false, err
 	}
 	app := App{Name: sec.Keyword}
 	if bundle, ok := values[keyBundle]; ok {

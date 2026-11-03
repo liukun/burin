@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"strings"
 
 	"burin/internal/field"
 	"burin/internal/snippet"
@@ -116,19 +115,9 @@ func (s *Set) enabled(data string) bool {
 // parseApp reads a section: the app it names, by bundle identifier
 // with ":bundle:", and whether only a count of its badge shows.
 func parseApp(sec snippet.Snippet) (App, error) {
-	values := map[string]string{}
-	for line := range strings.Lines(sec.Content) {
-		key, value, ok := field.Parse(strings.TrimSpace(line))
-		if !ok {
-			continue
-		}
-		if !sectionKeys[key] {
-			return App{}, fmt.Errorf("unknown key %q", key)
-		}
-		if _, seen := values[key]; seen {
-			return App{}, fmt.Errorf("duplicate :%s:", key)
-		}
-		values[key] = value
+	values, err := field.Section(sec.Content, sectionKeys)
+	if err != nil {
+		return App{}, err
 	}
 	app := App{Name: sec.Keyword}
 	if bundle, ok := values[keyBundle]; ok {

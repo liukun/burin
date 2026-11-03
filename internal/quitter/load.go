@@ -71,27 +71,8 @@ func Parse(data string) Set {
 	return s
 }
 
-// sectionValues collects the key lines of a section. No key may repeat.
-func sectionValues(content string) (map[string]string, error) {
-	values := map[string]string{}
-	for line := range strings.Lines(content) {
-		key, value, ok := field.Parse(strings.TrimSpace(line))
-		if !ok {
-			continue
-		}
-		if !knownKeys[key] {
-			return nil, fmt.Errorf("unknown key %q", key)
-		}
-		if _, seen := values[key]; seen {
-			return nil, fmt.Errorf("duplicate :%s:", key)
-		}
-		values[key] = value
-	}
-	return values, nil
-}
-
 func parseRule(sec snippet.Snippet) (Rule, error) {
-	values, err := sectionValues(sec.Content)
+	values, err := field.Section(sec.Content, knownKeys)
 	if err != nil {
 		return Rule{}, err
 	}

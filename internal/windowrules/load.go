@@ -3,10 +3,10 @@ package windowrules
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"burin/internal/field"
 	"burin/internal/snippet"
@@ -49,7 +49,19 @@ var (
 	marginKeys = map[string]bool{
 		keyScreenW: true, keyScreenH: true, keyMargin: true, keyExcept: true,
 	}
+	// sectionKeys are the keys of either kind, and repeatableKeys those
+	// that may repeat in a section.
+	sectionKeys    = union(pinKeys, marginKeys)
+	repeatableKeys = map[string]bool{keyExcept: true}
 )
+
+// union is the keys of a and b.
+func union(a, b map[string]bool) map[string]bool {
+	u := make(map[string]bool, len(a)+len(b))
+	maps.Copy(u, a)
+	maps.Copy(u, b)
+	return u
+}
 
 var anchors = map[string]Anchor{"topLeft": TopLeft, "bottomLeft": BottomLeft}
 
@@ -111,26 +123,10 @@ func (c *Config) addSection(sec snippet.Snippet) error {
 	return nil
 }
 
-// sectionValues collects the key lines of a section. Only :except: may
-// repeat.
+// sectionValues collects the key lines of a section, of either kind.
+// Only :except: may repeat.
 func sectionValues(content string) (map[string][]string, error) {
-	values := map[string][]string{}
-	for line := range strings.Lines(content) {
-		key, value, ok := field.Parse(strings.TrimSpace(line))
-		if !ok {
-			continue
-		}
-		known := pinKeys[key] || marginKeys[key]
-		if !known {
-			return nil, fmt.Errorf("unknown key %q", key)
-		}
-		_, seen := values[key]
-		if seen && key != keyExcept {
-			return nil, fmt.Errorf("duplicate :%s:", key)
-		}
-		values[key] = append(values[key], value)
-	}
-	return values, nil
+	return field.SectionLists(content, sectionKeys, repeatableKeys)
 }
 
 // checkKeys rejects keys the kind of section does not take.

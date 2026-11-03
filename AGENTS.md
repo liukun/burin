@@ -21,3 +21,11 @@
 
 - The log is at `~/Library/Logs/burin.log` (also stderr). Check it after a
   restart to confirm the rules loaded.
+
+# Config file syntax
+
+- Field keys (`:key: value` lines, parsed by `internal/field`) allow only
+  letters, digits and underscores. Name a multi-word key with an
+  underscore (`:count_only:`, `:height_max:`), never a hyphen: a
+  hyphenated key is not a field at all and is silently read as a
+  comment line.

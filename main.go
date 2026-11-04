@@ -862,8 +862,14 @@ func (b *burin) startActivity() {
 	b.reloadMu.Unlock()
 	b.badges.Start(badge.PollInterval)
 
-	sleep := func() { t.Sleep(time.Now()) }
-	wake := func() { t.Wake(time.Now()) }
+	sleep := func() {
+		log.Printf("activity: sleep or lock screen")
+		t.Sleep(time.Now())
+	}
+	wake := func() {
+		log.Printf("activity: wake or unlock screen")
+		t.Wake(time.Now())
+	}
 	mygo.Power.OnSuspend(sleep)
 	mygo.Power.OnLockScreen(sleep)
 	mygo.Power.OnResume(wake)
@@ -871,6 +877,8 @@ func (b *burin) startActivity() {
 
 	ticker := time.NewTicker(activity.PollInterval)
 	go func() {
+		// wasBreak logs the breaks starting and ending.
+		var wasBreak bool
 		for now := range ticker.C {
 			// A disabled tracker ignores the tick: skip the main-thread
 			// calls for it.
@@ -883,7 +891,12 @@ func (b *burin) startActivity() {
 			inputRecent := systemIdle < activity.ActivityWindow
 			frontIdle := inputRecent && b.frontIsIdleApp()
 			t.Tick(now, systemIdle, frontIdle)
-			if t.OnBreak() {
+			onBreak := t.OnBreak()
+			if onBreak != wasBreak {
+				log.Printf("activity: break=%v idle=%s", onBreak, systemIdle.Round(time.Second))
+				wasBreak = onBreak
+			}
+			if onBreak {
 				b.speaker.Tick(now, b.badges.Badges())
 			}
 		}

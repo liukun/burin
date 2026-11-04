@@ -41,9 +41,11 @@ order the bar shows them, after an optional switch before the first heading:
 - `:speak: yes` reads the app's count aloud while you are on a break (the
   [timer](timer.md) shows one; nothing is spoken while the timer is off or the Mac sleeps
   or is locked): "Slack has 3 messages", or "99 plus messages" for a `99+`, several apps in one
-  breath. A dot is not spoken. The count is spoken again every minute while the break and the badge last, even
-  if it has not changed, so a message that came in as you stepped away still reaches you.
-  The default is `no`.
+  breath. A dot is not spoken. The count is spoken again 5 seconds after the previous one
+  ends, while the break and the badge last, even if it has not changed, so a message that
+  came in as you stepped away still reaches you. It pauses while you are typing or moving
+  the mouse before the timer counts you as back at work, and goes on if you stop short of
+  that. The default is `no`.
 - `:windows: yes` shows a `⧉` item with the app's icon while the app has two or more
   standard windows, minimized ones included (hover it to see how many), right after the
   app's badge or, without one, in the app's place. It comes and goes with the windows,

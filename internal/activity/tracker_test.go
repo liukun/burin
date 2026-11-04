@@ -595,3 +595,24 @@ func TestOnBreak(t *testing.T) {
 		t.Error("OnBreak = true with the timer off, want false")
 	}
 }
+
+func TestOnBreakNotWhileResuming(t *testing.T) {
+	tr := NewTracker(base, DefaultConfig)
+	now := base
+	run(tr, &now, DefaultIdle, ActivityWindow, false)
+	if !tr.OnBreak() {
+		t.Fatal("OnBreak = false while idle, want true")
+	}
+	run(tr, &now, PollInterval, 0, false)
+	if s := tr.Snapshot(now); s.Status != Idle || !s.Resuming || tr.OnBreak() {
+		t.Fatalf("status = %v resuming = %v OnBreak = %v after input, want idle, resuming and not on a break", s.Status, s.Resuming, tr.OnBreak())
+	}
+	run(tr, &now, ActiveThreshold-2*PollInterval, 0, false)
+	if tr.OnBreak() {
+		t.Fatal("OnBreak = true just under the threshold, want false")
+	}
+	run(tr, &now, PollInterval, ActivityWindow, false)
+	if s := tr.Snapshot(now); s.Status != Idle || s.Resuming || !tr.OnBreak() {
+		t.Fatalf("status = %v resuming = %v OnBreak = %v after the input stopped, want idle and on a break", s.Status, s.Resuming, tr.OnBreak())
+	}
+}

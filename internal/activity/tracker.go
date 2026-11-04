@@ -176,8 +176,8 @@ func (t *Tracker) Tick(now time.Time, systemIdle time.Duration, frontIdle bool) 
 	// is still time at the computer, but a glance at a message while
 	// away should not count as coming back.
 	noInput := systemIdle >= ActivityWindow
-	onBreak := t.status == Idle
-	isIdle := noInput || (onBreak && frontIdle)
+	idleStatus := t.status == Idle
+	isIdle := noInput || (idleStatus && frontIdle)
 	t.paused = isIdle
 	t.lastUpdate = now
 
@@ -418,13 +418,23 @@ func (t *Tracker) Enabled() bool {
 }
 
 // OnBreak reports whether the user is on a break at the Mac: the timer
-// is on and idle. A sleeping tracker, between Sleep and Wake, reads Idle
-// too, as Sleep ends the active period, but the user is then away from
-// the Mac, not on a break at it.
+// is on and idle, and no input is being counted toward returning to
+// work. A sleeping tracker, between Sleep and Wake, reads Idle too, as
+// Sleep ends the active period, but the user is then away from the Mac,
+// not on a break at it. While input is counted toward ActiveThreshold
+// the user may be back at work already, so that is not a break either;
+// input that stops short of it leaves the user on the break again.
 func (t *Tracker) OnBreak() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return !t.disabled && !t.sleeping && t.status == Idle
+	timerOn := !t.disabled && !t.sleeping
+	return timerOn && t.status == Idle && !t.resuming()
+}
+
+// resuming reports whether input is being counted toward
+// ActiveThreshold during a break. t.mu is held.
+func (t *Tracker) resuming() bool {
+	return t.consecActive > 0
 }
 
 // Snapshot returns what the bar shows at now.
@@ -442,7 +452,7 @@ func (t *Tracker) Snapshot(now time.Time) Snapshot {
 		if !t.idleStart.IsZero() {
 			s.Elapsed = now.Sub(t.idleStart)
 		}
-		s.Resuming = t.consecActive > 0
+		s.Resuming = t.resuming()
 		return s
 	}
 	s.Elapsed = now.Sub(t.activeStart)

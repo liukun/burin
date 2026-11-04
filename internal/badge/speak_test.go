@@ -88,8 +88,10 @@ func newTestSpeaker(f *fakeSay) *Speaker {
 	return s
 }
 
-// tick ticks s and waits for the say it starts, if any.
+// tick ticks s at now and waits for the say it starts, if any, which
+// ends at now too.
 func tick(s *Speaker, now time.Time, badges []Badge) {
+	s.now = func() time.Time { return now }
 	s.Tick(now, badges)
 	s.done.Wait()
 }
@@ -142,39 +144,43 @@ func TestSpeakerTick(t *testing.T) {
 		}
 	})
 
-	t.Run("repeats after a minute", func(t *testing.T) {
+	t.Run("repeated once the gap after a say has passed", func(t *testing.T) {
 		f := &fakeSay{}
 		s := newTestSpeaker(f)
 		tick(s, noon, slack)
-		tick(s, noon.Add(2*time.Second), slack)
-		tick(s, noon.Add(59*time.Second), slack)
+		tick(s, noon.Add(speakGap-time.Millisecond), slack)
 		if got := f.spoken(); len(got) != 1 {
-			t.Fatalf("said %q within a minute, want once", got)
+			t.Fatalf("said %q within %v of the say ending, want once", got, speakGap)
 		}
-		tick(s, noon.Add(time.Minute), slack)
+		tick(s, noon.Add(speakGap), slack)
 		if got := f.spoken(); len(got) != 2 {
-			t.Errorf("said %q after a minute, want twice", got)
+			t.Errorf("said %q %v after the say ended, want twice", got, speakGap)
 		}
 	})
 
-	t.Run("one say at a time", func(t *testing.T) {
+	t.Run("nothing started while a say runs", func(t *testing.T) {
 		f := &fakeSay{release: make(chan struct{})}
 		s := newTestSpeaker(f)
 		chat := []Badge{{Name: "Chat", Label: "1", Speak: true}}
 		s.Tick(noon, slack)
-		// Wait for the first say to start, so the next tick finds it
+		// Wait for the first say to start, so the next ticks find it
 		// running.
 		for len(f.spoken()) == 0 {
 			time.Sleep(time.Millisecond)
 		}
-		s.Tick(noon.Add(2*time.Second), chat)
+		s.Tick(noon.Add(speakGap), chat)
+		s.Tick(noon.Add(time.Hour), chat)
+		// The say ends an hour after it started.
+		ended := noon.Add(time.Hour)
+		s.now = func() time.Time { return ended }
 		close(f.release)
 		s.done.Wait()
 		if got, want := f.spoken(), []string{"Slack has 3 messages"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("said %q while a say ran, want %q", got, want)
 		}
-		// Chat, skipped while Slack was said, is due once it is done.
-		tick(s, noon.Add(4*time.Second), chat)
+		// The gap counts from when the say ended.
+		tick(s, ended.Add(speakGap-time.Millisecond), chat)
+		tick(s, ended.Add(speakGap), chat)
 		if got, want := f.spoken(), []string{"Slack has 3 messages", "Chat has 1 message"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("said %q, want %q", got, want)
 		}
@@ -184,7 +190,7 @@ func TestSpeakerTick(t *testing.T) {
 		f := &fakeSay{err: errors.New("no voice")}
 		s := newTestSpeaker(f)
 		tick(s, noon, slack)
-		tick(s, noon.Add(time.Minute), slack)
+		tick(s, noon.Add(speakGap), slack)
 		if got := f.spoken(); len(got) != 2 {
 			t.Errorf("said %q, want twice", got)
 		}
@@ -204,21 +210,24 @@ func TestSpeakerTick(t *testing.T) {
 		f := &fakeSay{err: errors.New("no voice")}
 		s := newTestSpeaker(f)
 		tick(s, noon, slack)
-		tick(s, noon.Add(time.Minute), slack)
+		tick(s, noon.Add(speakGap), slack)
+		if got := f.spoken(); len(got) != 2 {
+			t.Fatalf("said %q, want twice", got)
+		}
 		if got := strings.Count(logged.String(), "no voice"); got != 1 {
 			t.Fatalf("logged %q, want the failure once", logged.String())
 		}
 		f.mu.Lock()
 		f.err = nil
 		f.mu.Unlock()
-		tick(s, noon.Add(2*time.Minute), slack)
+		tick(s, noon.Add(2*speakGap), slack)
 		if s.sayErrors.last != "" {
 			t.Fatalf("lastErr = %q after a success, want it cleared", s.sayErrors.last)
 		}
 		f.mu.Lock()
 		f.err = errors.New("no voice")
 		f.mu.Unlock()
-		tick(s, noon.Add(3*time.Minute), slack)
+		tick(s, noon.Add(3*speakGap), slack)
 		if got := strings.Count(logged.String(), "no voice"); got != 2 {
 			t.Errorf("logged %q, want the failure again after a success", logged.String())
 		}

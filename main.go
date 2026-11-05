@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -142,16 +143,18 @@ type burin struct {
 }
 
 // logFile is where the log is kept besides stderr, which a login item
-// has nowhere to send: ~/Library/Logs/burin.log. A file past
-// maxLogSize at startup is moved aside to burin.log.old first, so the
-// two never hold more than twice that.
+// has nowhere to send: ~/Library/Logs/burin.log. A file past maxLogSize
+// at startup is moved aside to burin.log.old first, so the two never
+// hold more than twice that.
 const (
 	logFileName = "burin.log"
 	maxLogSize  = 5 << 20
 )
 
 // openLog adds a log file under ~/Library/Logs to the log output. A
-// failure is logged and leaves stderr alone.
+// failure is logged and leaves stderr alone. Panic and fatal error
+// traces go to the file too, since the stderr of a bundle launched by
+// open or as a login item is lost.
 func openLog() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -175,6 +178,9 @@ func openLog() {
 		return
 	}
 	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	if err := debug.SetCrashOutput(f, debug.CrashOptions{}); err != nil {
+		log.Print(err)
+	}
 }
 
 func configDir() string {

@@ -328,13 +328,18 @@ func (b *Bar) view(c *ui.Context, w *window) {
 // frame that measured the content, it lands in the pass after a trimmed
 // drawable's refit and mygo scales that frame into the new size, which
 // squeezes the icons and text sideways. One refresh later it does not.
+// A frame before the window is stored leaves the width for the next frame
+// to fit.
 func (b *Bar) fit(w *window, width float32) {
 	px := int(math.Ceil(float64(width)))
 	if px == w.width {
 		return
 	}
-	w.width = px
 	win := w.win.Load()
+	if win == nil {
+		return
+	}
+	w.width = px
 	time.AfterFunc(resizeDelay, func() {
 		win.Update(func() {
 			win.SetContentSize(px, height)

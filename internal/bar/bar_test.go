@@ -160,3 +160,19 @@ func TestRightClickWithMenuOpensIt(t *testing.T) {
 		t.Errorf("menu = %q, want Rest", menu)
 	}
 }
+
+func TestFitWithoutWindowKeepsWidth(t *testing.T) {
+	const initialWidth = 50
+	b := &Bar{}
+	w := &window{width: initialWidth}
+	// A frame before the window is stored must not panic nor mark the
+	// width as fitted, so the next frame retries.
+	b.fit(w, 100)
+	if w.width != initialWidth {
+		t.Fatalf("width = %d after first fit, want %d", w.width, initialWidth)
+	}
+	b.fit(w, 100)
+	if w.width != initialWidth {
+		t.Fatalf("width = %d after second fit, want %d", w.width, initialWidth)
+	}
+}

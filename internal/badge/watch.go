@@ -70,8 +70,9 @@ type Watcher struct {
 	// apps, false when the main thread did not answer, icon the icon of
 	// an app from its bundle path or else its name, open activates an
 	// app, and now is the time. windows counts the standard windows of an
-	// app by pid, activate brings an app to the front by pid, and raise
-	// brings its next window to the front.
+	// app by pid, activate brings an app to the front by pid, frontmost
+	// returns the pid of the frontmost app, and raise brings a window of
+	// an app to the front, given whether the app is frontmost.
 	read        func() (map[string]DockIcon, error)
 	runningApps func() ([]workspace.App, bool)
 	icon        func(name, path string) (ui.ImageSource, error)
@@ -79,7 +80,8 @@ type Watcher struct {
 	now         func() time.Time
 	windows     func(pid int32) (int, error)
 	activate    func(pid int32) bool
-	raise       func(pid int32) error
+	frontmost   func() (pid int32, ok bool)
+	raise       func(pid int32, appFrontmost bool) error
 
 	// lastRunning is the last listing of the running apps that was
 	// answered, lastCounts the window counts made from it, runningErrors
@@ -117,6 +119,7 @@ func NewWatcher() *Watcher {
 		now:           time.Now,
 		windows:       windowrules.CountStandardWindows,
 		activate:      workspace.Activate,
+		frontmost:     workspace.FrontmostPID,
 		raise:         windowrules.RaiseNextWindow,
 		icons:         map[string]ui.ImageSource{},
 		iconFailures:  map[string]iconFailure{},
@@ -467,13 +470,16 @@ func (w *Watcher) openApp(name string) {
 	}
 }
 
-// cycle raises the next standard window of app name, of process pid,
-// and brings the app to the front.
+// cycle raises a standard window of app name, of process pid, and
+// brings the app to the front. Which window depends on whether the app
+// is frontmost: see windowrules.RaiseNextWindow.
 func (w *Watcher) cycle(name string, pid int32) {
 	// The window is raised before the app is activated: activation is
 	// asynchronous, and finishing after the raise it would bring the old
 	// main window back to the front.
-	if err := w.raise(pid); err != nil {
+	front, ok := w.frontmost()
+	appFrontmost := ok && front == pid
+	if err := w.raise(pid, appFrontmost); err != nil {
 		log.Printf("badges: next window of %s: %v", name, err)
 	}
 	if !w.activate(pid) {

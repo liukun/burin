@@ -49,8 +49,9 @@ order the bar shows them, after an optional switch before the first heading:
 - `:windows: yes` shows a `⧉` item with the app's icon while the app has two or more
   standard windows, minimized ones included (hover it to see how many), right after the
   app's badge or, without one, in the app's place. It comes and goes with the windows,
-  whatever the badge shows. Click it to bring the app to the front with its next window
-  raised, so clicks cycle through them. The default is `no`.
+  whatever the badge shows. When the app is in the background, a click brings its child
+  window forward (raising the first child if the primary window is showing); when the app
+  is already frontmost, a click moves to the next window, so clicks cycle through them. The default is `no`.
 - `:speak_from:` and `:speak_until:`, before the first heading, are the time of day counts
   may be spoken, as `HH:MM` on a 24-hour clock: 10:00 and 22:00 by default. An until
   earlier than the from crosses midnight (`22:00` to `02:00`); the same time for both

@@ -255,10 +255,12 @@ type fakeDock struct {
 	windows    map[int32]int
 	windowErr  error
 	counted    int
-	// cycled records every raise and activation in order, as "raise 20"
+	// cycled records every raise and activation in order, as "raise 20 false"
 	// and "activate 20", and activated receives the pid of every
 	// activation, the last step of a click.
-	cycled    []string
+	cycled []string
+	// front is the pid of the frontmost app.
+	front     int32
 	activated chan int32
 }
 
@@ -308,10 +310,15 @@ func newTestWatcher(d *fakeDock) *Watcher {
 		}
 		return true
 	}
-	w.raise = func(pid int32) error {
+	w.frontmost = func() (int32, bool) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		d.cycled = append(d.cycled, fmt.Sprintf("raise %d", pid))
+		return d.front, true
+	}
+	w.raise = func(pid int32, appFrontmost bool) error {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.cycled = append(d.cycled, fmt.Sprintf("raise %d %v", pid, appFrontmost))
 		return nil
 	}
 	return w
@@ -471,7 +478,7 @@ func TestWatcherWindowItems(t *testing.T) {
 	d.mu.Lock()
 	cycled := slices.Clone(d.cycled)
 	d.mu.Unlock()
-	if want := []string{"raise 20", "activate 20"}; !reflect.DeepEqual(cycled, want) {
+	if want := []string{"raise 20 false", "activate 20"}; !reflect.DeepEqual(cycled, want) {
 		t.Errorf("the click did %q, want %q", cycled, want)
 	}
 
@@ -501,6 +508,44 @@ func TestWatcherWindowItems(t *testing.T) {
 	w.poll()
 	if changes != 3 {
 		t.Errorf("changes = %d after counts changed only below %d, want still 3", changes, minWindows)
+	}
+}
+
+func TestWatcherWindowItemClickFrontmost(t *testing.T) {
+	tests := []struct {
+		name  string
+		front int32
+		want  []string
+	}{
+		{name: "app in the background", front: 10, want: []string{"raise 20 false", "activate 20"}},
+		{name: "app frontmost", front: 20, want: []string{"raise 20 true", "activate 20"}},
+	}
+	for _, tt := range tests {
+		d := &fakeDock{
+			running:   []workspace.App{{Name: "Notes", PID: 20}},
+			windows:   map[int32]int{20: 3},
+			activated: make(chan int32, 1),
+			front:     tt.front,
+		}
+		w := newTestWatcher(d)
+		w.SetApps([]App{{Name: "Notes", Windows: true}})
+		w.poll()
+		items := w.Items()
+		if len(items) != 1 {
+			t.Fatalf("%s: items = %+v, want Notes' window item", tt.name, items)
+		}
+		items[0].OnClick()
+		select {
+		case <-d.activated:
+		case <-time.After(time.Second):
+			t.Fatalf("%s: the click activated nothing", tt.name)
+		}
+		d.mu.Lock()
+		cycled := slices.Clone(d.cycled)
+		d.mu.Unlock()
+		if !reflect.DeepEqual(cycled, tt.want) {
+			t.Errorf("%s: the click did %q, want %q", tt.name, cycled, tt.want)
+		}
 	}
 }
 

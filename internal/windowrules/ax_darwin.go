@@ -237,18 +237,23 @@ func CountStandardWindows(pid int32) (int, error) {
 	return len(windows), nil
 }
 
-// RaiseNextWindow brings the app's next standard window to the front:
-// the standard windows are taken in the order of their CGWindowIDs, and
-// the one after the main window's, wrapping around, or the first when
-// none is main, is un-minimized, raised and made main. The order is the
-// IDs' rather than AXWindows', which is front to back: there the raised
-// window would become the first and the old main the second, so clicks
-// would only swap the two frontmost windows. A window without a
-// CGWindowID cannot be placed in that order and is left out. With fewer
-// than two windows to cycle there is nothing to cycle to, and it does
-// nothing. It runs on the calling goroutine, like the rest of the
-// package's Accessibility calls.
-func RaiseNextWindow(pid int32) error {
+// RaiseNextWindow raises one of the app's standard windows, given
+// whether the app is frontmost. The standard windows are taken in the
+// order of their CGWindowIDs, the lowest being the app's primary window
+// and the others its child windows. A frontmost app moves to the window
+// after the main one, wrapping around, or the first when none is main.
+// An app in the background keeps a child window that is main, leaving it
+// as it is for the activation to bring forward, and with the primary
+// window main, or none, moves to the first child. The window chosen is
+// un-minimized, raised and made main. The order is the IDs' rather than
+// AXWindows', which is front to back: there the raised window would
+// become the first and the old main the second, so clicks would only
+// swap the two frontmost windows. A window without a CGWindowID cannot
+// be placed in that order and is left out. With fewer than two windows
+// to cycle there is nothing to raise, and it does nothing. It runs on
+// the calling goroutine, like the rest of the package's Accessibility
+// calls.
+func RaiseNextWindow(pid int32, appFrontmost bool) error {
 	if axUIElementGetWindow == nil {
 		return errors.New("window IDs are unavailable: no _AXUIElementGetWindow")
 	}
@@ -273,7 +278,7 @@ func RaiseNextWindow(pid int32) error {
 		}
 	}
 	slices.Sort(ids)
-	next := nextWindowID(mainID, ids)
+	next := windowToRaise(mainID, ids, appFrontmost)
 	if next == 0 {
 		return nil
 	}

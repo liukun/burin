@@ -36,9 +36,6 @@ const (
 	// rebuildDelay lets a burst of display changes, as one is plugged in,
 	// rebuild the bars once.
 	rebuildDelay = 500 * time.Millisecond
-	// resizeDelay is past the refresh period that fit must wait, 20ms in
-	// tests; not visible on a bar.
-	resizeDelay = 50 * time.Millisecond
 )
 
 // textColor is the bar's text: plain white, no background. mygo has no
@@ -324,12 +321,8 @@ func (b *Bar) view(c *ui.Context, w *window) {
 }
 
 // fit resizes the window to the content's width, unless it has it, and
-// keeps it centered. The resize waits resizeDelay: queued right after the
-// frame that measured the content, it lands in the pass after a trimmed
-// drawable's refit and mygo scales that frame into the new size, which
-// squeezes the icons and text sideways. One refresh later it does not.
-// A frame before the window is stored leaves the width for the next frame
-// to fit.
+// keeps it centered, in one frame change right from the view. A frame
+// before the window is stored leaves the width for the next frame to fit.
 func (b *Bar) fit(w *window, width float32) {
 	px := int(math.Ceil(float64(width)))
 	if px == w.width {
@@ -340,13 +333,8 @@ func (b *Bar) fit(w *window, width float32) {
 		return
 	}
 	w.width = px
-	time.AfterFunc(resizeDelay, func() {
-		win.Update(func() {
-			win.SetContentSize(px, height)
-			p := barOrigin(w.area, px)
-			win.SetPosition(p.X, p.Y)
-		})
-	})
+	p := barOrigin(w.area, px)
+	win.SetContentBounds(mygo.Rectangle{X: p.X, Y: p.Y, Width: px, Height: height})
 }
 
 // itemView builds one item: its icon, then its text, with its tooltip,

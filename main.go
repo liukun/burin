@@ -103,9 +103,10 @@ type burin struct {
 	// hudGen drops the show anyway.
 	after    func(d time.Duration, fn func()) *time.Timer
 	hudTimer *time.Timer
-	// showGestureHUD shows the gestures by direction around the press at
-	// x, y, and hideGestureHUD hides them. Tests stand in for them.
-	showGestureHUD func(dirs hud.Directions, x, y float64)
+	// showGestureHUD shows the gestures by direction, over the app named
+	// app, around the press at x, y, and hideGestureHUD hides them. Tests
+	// stand in for them.
+	showGestureHUD func(dirs hud.Directions, app string, x, y float64)
 	hideGestureHUD func()
 
 	// tapMu guards the event tap, which is rebuilt when the mouse buttons
@@ -489,7 +490,8 @@ func (b *burin) stopHUDTimer() {
 func (b *burin) showHUD(gen uint64, button gesture.Button, x, y float64) {
 	set := b.gestures.Load()
 	b.spawn(func() {
-		dirs := gestureDirections(set.Available(button, b.io.frontApp()))
+		app := b.io.frontApp()
+		dirs := gestureDirections(set.Available(button, app))
 		b.ifLatestHUD(gen, func() {
 			// With nothing to show, the gestures of an earlier press still
 			// go: its release's hide may have been dropped as stale.
@@ -497,7 +499,7 @@ func (b *burin) showHUD(gen uint64, button gesture.Button, x, y float64) {
 				b.hideGestureHUD()
 				return
 			}
-			b.showGestureHUD(dirs, x, y)
+			b.showGestureHUD(dirs, app.Name, x, y)
 		})
 	})
 }
@@ -538,9 +540,9 @@ func gestureDirections(rules []gesture.Rule) hud.Directions {
 }
 
 // showGestureCompass is showGestureHUD of the running app.
-func (b *burin) showGestureCompass(dirs hud.Directions, x, y float64) {
+func (b *burin) showGestureCompass(dirs hud.Directions, app string, x, y float64) {
 	if c := b.compass.Load(); c != nil {
-		c.Show(dirs, x, y)
+		c.Show(dirs, app, x, y)
 	}
 }
 

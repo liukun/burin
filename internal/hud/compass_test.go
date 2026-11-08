@@ -85,9 +85,15 @@ func TestProgressOfDiagonal(t *testing.T) {
 // compassTester builds the compass of *d at *p, sized to what it needs.
 func compassTester(t *testing.T, d *Directions, p *Progress) (*ui.Tester, *[2]float32) {
 	t.Helper()
+	return compassAppTester(t, d, "", p)
+}
+
+// compassAppTester is compassTester over the app named app.
+func compassAppTester(t *testing.T, d *Directions, app string, p *Progress) (*ui.Tester, *[2]float32) {
+	t.Helper()
 	var size [2]float32
 	tt := ui.NewTester(func(c *ui.Context) {
-		w, h := buildCompass(c, *d, *p, 0, 0)
+		w, h := buildCompass(c, *d, app, *p, 0, 0)
 		size = [2]float32{w, h}
 	}, 600, 400)
 	tt.SetSize(int(math.Ceil(float64(size[0]))), int(math.Ceil(float64(size[1]))))
@@ -139,7 +145,9 @@ func TestCompassCorners(t *testing.T) {
 	tt.SetSize(int(math.Ceil(float64(size[0]))), int(math.Ceil(float64(size[1]))))
 	tt.Frame()
 	savePNG(t, tt, "compass-corners")
-	larger := size[0] > cardinal[0] && size[1] > cardinal[1]
+	// The room kept for the arcs may already hold the corner labels'
+	// height, but not their width.
+	larger := size[0] > cardinal[0] && size[1] >= cardinal[1]
 	if !larger {
 		t.Errorf("size with corners %v, not larger than %v", *size, cardinal)
 	}
@@ -227,5 +235,63 @@ func TestCompassEmptyKeepsNothing(t *testing.T) {
 	tt, _ := compassTester(t, &d, &p)
 	if texts := tt.Texts(); len(texts) != 0 {
 		t.Fatalf("texts %q", texts)
+	}
+}
+
+func TestCompassApp(t *testing.T) {
+	d := Directions{Up: "Mission Control"}
+	p := Progress{}
+	tt, size := compassAppTester(t, &d, "Safari", &p)
+	savePNG(t, tt, "compass-app")
+	app, ok := tt.Find("Safari")
+	if !ok {
+		t.Fatalf("missing app in %q", tt.Texts())
+	}
+	up, _ := tt.Find("Mission Control")
+	midX := size[0] / 2
+	above := app.Y+app.H <= up.Y && app.X < midX && app.X+app.W > midX
+	if !above {
+		t.Errorf("app %+v not above the up label %+v", app, up)
+	}
+	fits := app.Y >= 0 && app.X >= 0 && app.X+app.W <= size[0]
+	if !fits {
+		t.Errorf("app %+v does not fit %v", app, *size)
+	}
+	// Without an up gesture, the name sits where it would with one.
+	d2 := Directions{Left: "Back"}
+	tt2, size2 := compassAppTester(t, &d2, "Safari", &p)
+	app2, _ := tt2.Find("Safari")
+	if below := app2.Y+app2.H > size2[1]/2-cursorGap; below {
+		t.Errorf("app %+v reaches under the up label's place", app2)
+	}
+}
+
+func TestArcPath(t *testing.T) {
+	// The up arc peaks cursorGap above the middle, where the up label's
+	// bottom edge is, and spans both sides of it. Bounds takes in the
+	// control points, a little past the arc.
+	b := arcPath(100, 100, cursorGap, 270, arcHalfDeg).Bounds()
+	top := float32(100 - cursorGap)
+	if b.Y > top || b.Y < top-2 {
+		t.Errorf("up arc top %v, want just above %v", b.Y, top)
+	}
+	if !(b.X < 100 && b.X+b.W > 100 && b.Y+b.H < 100) {
+		t.Errorf("up arc %+v not over the middle", b)
+	}
+	// A right arc stays right of the middle, around its level.
+	if b := arcPath(100, 100, cursorGap, 0, arcHalfDeg).Bounds(); b.X <= 100 || b.Y > 100 || b.Y+b.H < 100 {
+		t.Errorf("right arc %+v not at the right", b)
+	}
+}
+
+func TestCompassFitsArcs(t *testing.T) {
+	// With only an up gesture, the window still holds the arcs of the
+	// other directions, the corner ones farthest out.
+	d := Directions{Up: "Up"}
+	p := Progress{}
+	tt, size := compassTester(t, &d, &p)
+	savePNG(t, tt, "compass-arcs")
+	if size[0] < 2*arcReach || size[1] < 2*arcReach {
+		t.Errorf("size %v does not hold the arcs, %v across", *size, 2*arcReach)
 	}
 }

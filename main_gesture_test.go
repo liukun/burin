@@ -81,10 +81,14 @@ func (f *fakeIO) eventIO() eventIO {
 }
 
 // hudFuncs sets b's gesture compass to stand-ins: a show is recorded as
-// its directions and the press, a hide as "hide".
+// its directions and the press, "over" the app if named, a hide as "hide".
 func (f *fakeIO) hudFuncs(b *burin) {
-	b.showGestureHUD = func(d hud.Directions, x, y float64) {
-		f.hud = append(f.hud, fmt.Sprintf("%+v@%v,%v", d, x, y))
+	b.showGestureHUD = func(d hud.Directions, app string, x, y float64) {
+		s := fmt.Sprintf("%+v@%v,%v", d, x, y)
+		if app != "" {
+			s += " over " + app
+		}
+		f.hud = append(f.hud, s)
 	}
 	b.hideGestureHUD = func() { f.hud = append(f.hud, "hide") }
 }
@@ -399,11 +403,11 @@ func TestGestureHUD(t *testing.T) {
 	b, f, _ := newGestureBurin(t)
 	f.front = workspace.App{Name: "Notes"}
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
-	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500 over Notes")
 	drag(b, f)
-	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500 over Notes")
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500", "hide")
+	f.checkHUD("{Up: Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500 over Notes", "hide")
 
 	// A gesture over Safari also shows its rule, untitled.
 	b, f, _ = newGestureBurin(t)
@@ -411,7 +415,7 @@ func TestGestureHUD(t *testing.T) {
 	b.handleGesture(gesture.EventRightMouseDown, rightDown)
 	releaseBy(f, -50, 0)
 	b.handleGesture(gesture.EventRightMouseUp, rightUp)
-	f.checkHUD("{Up:up Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500", "hide")
+	f.checkHUD("{Up:up Down: Left:Back Right: UpLeft: UpRight: DownLeft: DownRight:}@500,500 over Safari", "hide")
 
 	// A button without rules shows nothing: its press and release hide.
 	b, f, _ = newGestureBurin(t)

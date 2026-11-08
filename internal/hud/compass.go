@@ -33,6 +33,20 @@ const (
 	// from being cut off.
 	glowRoom = glowBlur + glowSpread + 2
 	dotSize  = 6
+	// appGap is the distance from the top of the up label to the name
+	// of the app the gestures are of, shown above it.
+	appGap = 6
+	// arcHalfDeg and cornerArcHalfDeg are half the angular span of the
+	// arc under an axis label and a diagonal one, the latter narrower as
+	// its labels are farther out.
+	arcHalfDeg       = 25
+	cornerArcHalfDeg = 15
+	// cornerArcRadius reaches the inner corner of a diagonal label,
+	// cornerGap out on both axes, so that the arc touches it.
+	cornerArcRadius = cornerGap * math.Sqrt2
+	// arcReach is the room the arcs need on both sides of the middle,
+	// the farthest ones and their stroke, with or without labels.
+	arcReach = cornerArcRadius + pillBorder
 	// compassOpacity is the compass's when shown: its labels are small,
 	// so they need not let what they cover show through.
 	compassOpacity = 1
@@ -43,6 +57,9 @@ const (
 
 // Colors of the progress of a gesture.
 var (
+	// idleArcAlpha fades the arc of a direction without a gesture, a
+	// frame around the pointer rather than a target.
+	idleArcAlpha  = float32(0.5)
 	progressColor = ui.Hex("#3fd2ff")
 	// armedColor tells that releasing runs the gesture.
 	armedColor = keyColor
@@ -177,8 +194,10 @@ type Compass struct {
 
 	// mu guards the gestures shown, the pointer's offset from the press
 	// and the polling.
-	mu     sync.Mutex
-	dirs   Directions
+	mu   sync.Mutex
+	dirs Directions
+	// app is the name of the app the gestures are of, shown above them.
+	app    string
 	dx, dy float64
 	// stop stops the poller of the last show, nil while hidden; a poller
 	// whose stop is no longer it is stale and stops writing.
@@ -206,14 +225,15 @@ func NewCompass(tray *mygo.Tray) *Compass {
 	return c
 }
 
-// Show shows dirs in the compass centered on the press at x, y, in
-// CoreGraphics coordinates, and follows the pointer until Hide.
-func (c *Compass) Show(dirs Directions, x, y float64) {
+// Show shows dirs, the gestures over the app named app, in the compass
+// centered on the press at x, y, in CoreGraphics coordinates, and
+// follows the pointer until Hide.
+func (c *Compass) Show(dirs Directions, app string, x, y float64) {
 	c.mu.Lock()
 	c.stopPolling()
 	stop := make(chan struct{})
 	c.stop = stop
-	c.dirs = dirs
+	c.dirs, c.app = dirs, app
 	c.dx, c.dy = 0, 0
 	c.mu.Unlock()
 	go c.poll(stop, x, y)
@@ -229,7 +249,7 @@ func (c *Compass) Show(dirs Directions, x, y float64) {
 func (c *Compass) Hide() {
 	c.mu.Lock()
 	c.stopPolling()
-	c.dirs = Directions{}
+	c.dirs, c.app = Directions{}, ""
 	c.mu.Unlock()
 	c.win.Update(c.win.Hide)
 }
@@ -307,12 +327,12 @@ func centeredAt(center mygo.Point, width, height int, area mygo.Rectangle) mygo.
 
 func (c *Compass) view(ctx *ui.Context) {
 	c.mu.Lock()
-	d, dx, dy := c.dirs, c.dx, c.dy
+	d, app, dx, dy := c.dirs, c.app, c.dx, c.dy
 	c.mu.Unlock()
 	// The labels stay around the window's middle; the dot is drawn at
 	// the pointer, which is off the middle by the shift.
 	dotX, dotY := float64(c.shift.X)+dx, float64(c.shift.Y)+dy
-	w, h := buildCompass(ctx, d, progressOf(dx, dy), dotX, dotY)
+	w, h := buildCompass(ctx, d, app, progressOf(dx, dy), dotX, dotY)
 	// The compass is hidden while no button is held: keep its size, so a
 	// press does not resize it from empty.
 	if d.Empty() {
@@ -347,18 +367,60 @@ func styleOf(th *ui.Theme, t float32, armed bool) pillStyle {
 	}
 }
 
+// arcPath is an arc of radius r around cx, cy, spanning halfDeg either
+// side of midDeg, degrees clockwise from the right as y points down. One
+// cubic approximates it, to a fraction of a pixel under 90°.
+func arcPath(cx, cy, r, midDeg, halfDeg float32) *ui.Path {
+	a0 := float64(midDeg-halfDeg) * math.Pi / 180
+	a1 := float64(midDeg+halfDeg) * math.Pi / 180
+	k := float32(4.0 / 3.0 * math.Tan((a1-a0)/4))
+	x0, y0 := float32(math.Cos(a0)), float32(math.Sin(a0))
+	x1, y1 := float32(math.Cos(a1)), float32(math.Sin(a1))
+	return (&ui.Path{}).
+		MoveTo(cx+r*x0, cy+r*y0).
+		CubeTo(cx+r*(x0-k*y0), cy+r*(y0+k*x0), cx+r*(x1+k*y1), cy+r*(y1-k*x1), cx+r*x1, cy+r*y1)
+}
+
+// arcOf is the radius and middle angle of the arc under dir's label,
+// for arcPath: an axis arc touches its label's near edge, a diagonal
+// one its label's inner corner.
+func arcOf(dir gesture.Direction) (r, midDeg, halfDeg float32) {
+	switch dir {
+	case gesture.Up:
+		return cursorGap, 270, arcHalfDeg
+	case gesture.Down:
+		return cursorGap, 90, arcHalfDeg
+	case gesture.Left:
+		return cursorGap, 180, arcHalfDeg
+	case gesture.Right:
+		return cursorGap, 0, arcHalfDeg
+	case gesture.UpLeft:
+		return cornerArcRadius, 225, cornerArcHalfDeg
+	case gesture.UpRight:
+		return cornerArcRadius, 315, cornerArcHalfDeg
+	case gesture.DownLeft:
+		return cornerArcRadius, 135, cornerArcHalfDeg
+	case gesture.DownRight:
+		return cornerArcRadius, 45, cornerArcHalfDeg
+	}
+	return 0, 0, 0
+}
+
 // buildCompass builds the labels of d around the middle, lit by p, and
 // the dot of the pointer dx, dy from the middle; it returns the content
-// size they need.
-func buildCompass(c *ui.Context, d Directions, p Progress, dx, dy float64) (width, height float32) {
+// size they need. Under the labels, an arc around the middle faces each
+// one, lit like it, the up one touching its label; the name of the app,
+// unless empty, sits above the up label, under the corner labels should
+// they reach it.
+func buildCompass(c *ui.Context, d Directions, app string, p Progress, dx, dy float64) (width, height float32) {
 	th := c.Theme()
-	c.Root().Background(ui.Transparent)
 	type label struct {
 		dir   gesture.Direction
 		title string
 		// textW and textH are the title's size; w and h the label's at
-		// rest, without the growth of an armed one.
+		// rest, without the growth of an armed one; st is how it looks.
 		textW, textH, w, h float32
+		st                 pillStyle
 	}
 	var labels []label
 	var sideW, sideH, stackW, stackH, cornerW, cornerH float32
@@ -370,7 +432,8 @@ func buildCompass(c *ui.Context, d Directions, p Progress, dx, dy float64) (widt
 		tw, tht := c.MeasureText(0, ui.Span{Text: title, Size: fontSize})
 		tw += slack
 		l := label{dir: dir, title: title, textW: tw, textH: tht,
-			w: tw + 2*(pillPadX+pillBorder), h: tht + 2*(pillPadY+pillBorder)}
+			w: tw + 2*(pillPadX+pillBorder), h: tht + 2*(pillPadY+pillBorder),
+			st: styleOf(th, p.of(dir), p.Armed == dir)}
 		labels = append(labels, l)
 		switch dir {
 		case gesture.Up, gesture.Down:
@@ -390,13 +453,43 @@ func buildCompass(c *ui.Context, d Directions, p Progress, dx, dy float64) (widt
 	if cornerW > 0 {
 		cornerX, cornerY = 2*(cornerGap+cornerW+grow), 2*(cornerGap+cornerH+grow)
 	}
-	width = max(2*(cursorGap+sideW+grow), stackW+grow, cornerX) + 2*glowRoom
-	height = max(2*(cursorGap+stackH+grow), sideH+grow, cornerY) + 2*glowRoom
+	// The app's name goes appGap above the up label's place, whether it
+	// has a gesture or not; the window stays centered on the press, so
+	// the room it takes is added below too.
+	var appW, appH, appRoom float32
+	if app != "" {
+		appW, appH = c.MeasureText(0, ui.Span{Text: app, Size: fontSize})
+		appW += slack
+		appRoom = appGap + appH
+	}
+	width = max(2*(cursorGap+sideW+grow), stackW+grow, appW, cornerX, 2*arcReach) + 2*glowRoom
+	height = max(2*(cursorGap+stackH+grow+appRoom), sideH+grow, cornerY, 2*arcReach) + 2*glowRoom
 	midX, midY := width/2, height/2
 
+	// Every direction gets an arc, so that the ones with gestures read
+	// against the whole; a direction without one keeps a faded arc, as
+	// a release there does nothing.
+	arcColor := make(map[gesture.Direction]ui.Color, len(labels))
 	for _, l := range labels {
-		armed := p.Armed == l.dir
-		st := styleOf(th, p.of(l.dir), armed)
+		arcColor[l.dir] = l.st.border
+	}
+	c.Root().Background(ui.Transparent).Draw(func(pt *ui.Painter, _ ui.Rect) {
+		for _, dir := range compassDirs {
+			color, ok := arcColor[dir]
+			if !ok {
+				color = th.Border.Alpha(idleArcAlpha)
+			}
+			r, mid, half := arcOf(dir)
+			pt.StrokePath(arcPath(midX, midY, r, mid, half), pillBorder, color)
+		}
+	})
+	if app != "" {
+		ui.Text(c, app).Absolute().Left(midX - appW/2).Top(midY - cursorGap - stackH - grow - appRoom).
+			Width(appW).Height(appH).FontSize(fontSize).TextColor(th.TextMuted).NoWrap()
+	}
+
+	for _, l := range labels {
+		st := l.st
 		w, h := l.w+2*st.pad, l.h+2*st.pad
 		// The near edge stays cursorGap from the middle as a label grows,
 		// and the inner corner of a diagonal label cornerGap on both axes.

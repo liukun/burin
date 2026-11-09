@@ -20,6 +20,7 @@ import (
 	"burin/internal/activity"
 	"burin/internal/badge"
 	"burin/internal/bar"
+	"burin/internal/copyflash"
 	"burin/internal/eventtap"
 	"burin/internal/expander"
 	"burin/internal/gesture"
@@ -47,18 +48,19 @@ const (
 )
 
 // burin holds the running app's snippet, leader, mouse gesture, window
-// rule, quitter, timer and badge state.
+// rule, quitter, timer, badge and clipboard flash state.
 type burin struct {
 	snippetsDir string
 	leadersDir  string
 	mouseDir    string
-	// windowRulesFile, quitterFile, timerFile and badgesFile sit directly
-	// in the config dir, outside snippets/ and leaders/, so neither of
-	// their loaders reads them.
+	// windowRulesFile, quitterFile, timerFile, badgesFile and
+	// clipboardFile sit directly in the config dir, outside snippets/ and
+	// leaders/, so neither of their loaders reads them.
 	windowRulesFile string
 	quitterFile     string
 	timerFile       string
 	badgesFile      string
+	clipboardFile   string
 	eval            *placeholder.Evaluator
 	ex              *expander.Expander
 	leader          *leader.Leader
@@ -137,6 +139,11 @@ type burin struct {
 	// break.
 	speaker      *badge.Speaker
 	badgesStatus *mygo.MenuItem
+	// copyflash watches the pasteboard and shows the flash on each copy;
+	// flash is set once the tray exists, and the watcher may fire before.
+	copyflash       *copyflash.Watcher
+	flash           atomic.Pointer[copyflash.Flash]
+	clipboardStatus *mygo.MenuItem
 	// workNotice is the last rest reminder, closed as the next one shows;
 	// workNoticeMu guards it.
 	workNoticeMu sync.Mutex
@@ -966,7 +973,8 @@ func (b *burin) remindRest(elapsed time.Duration) {
 }
 
 // reload rescans the snippets, leaders and mouse directories and rereads
-// the window rules, quitter rules, timer settings and badge apps.
+// the window rules, quitter rules, timer settings, badge apps and
+// clipboard flash settings.
 func (b *burin) reload() {
 	b.reloadSnippets()
 	b.reloadLeaders()
@@ -975,6 +983,7 @@ func (b *burin) reload() {
 	b.reloadQuitter()
 	b.reloadTimer()
 	b.reloadBadges()
+	b.reloadClipboard()
 }
 
 // reloadSnippets rescans the snippets directory and swaps the keyword
@@ -1119,6 +1128,42 @@ func (b *burin) reloadBadges() {
 	b.badgesStatus.SetLabel(status)
 }
 
+// reloadClipboard rereads the clipboard flash settings and turns the
+// watcher on or off. A missing or unreadable file leaves it on.
+func (b *burin) reloadClipboard() {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+	s := copyflash.Load(b.clipboardFile)
+	b.copyflash.SetEnabled(s.Enabled)
+	for _, err := range s.Errors {
+		log.Printf("clipboard: %v", err)
+	}
+	if s.Defaulted {
+		log.Printf("clipboard: %s missing or unusable, using the defaults", b.clipboardFile)
+	}
+	state := "off"
+	if s.Enabled {
+		state = "on"
+	}
+	log.Printf("loaded clipboard flash %s from %s", state, b.clipboardFile)
+	b.clipboardStatus.SetLabel("Clipboard flash: " + state)
+}
+
+// pasteSnippet is expander.Paste, which writes the pasteboard once: that
+// write is not a copy of the user's, so the change it made must not
+// flash. Paste's sleeps and Cmd+V run under the watcher's lock too, about
+// 40 ms, which only delays a poll.
+func (b *burin) pasteSnippet(keyword, text string) {
+	b.copyflash.Own(func() (int, bool) { return expander.Paste(keyword, text) })
+}
+
+// showFlash shows the clipboard flash, once the tray exists.
+func (b *burin) showFlash() {
+	if f := b.flash.Load(); f != nil {
+		f.Show()
+	}
+}
+
 // newLeaderEvaluator is the evaluator of leader entries and mouse
 // gestures: the snippet built-ins plus reload, open, toggle and key,
 // which snippets do not get.
@@ -1190,15 +1235,17 @@ func main() {
 		quitterFile:     filepath.Join(dir, quitter.FileName),
 		timerFile:       filepath.Join(dir, activity.FileName),
 		badgesFile:      filepath.Join(dir, badge.FileName),
+		clipboardFile:   filepath.Join(dir, copyflash.FileName),
 		badges:          badge.NewWatcher(),
 		speaker:         badge.NewSpeaker(),
 		eval:            newEvaluator(scriptsDir, loginPath),
-		ex:              expander.New(nil, expander.DefaultDelay, expander.Delete, expander.Paste),
 		io:              systemEventIO(),
 		spawn:           goSpawn,
 		after:           time.AfterFunc,
 	}
 	b.startTap = b.startEventTap
+	b.copyflash = copyflash.NewWatcher(b.showFlash)
+	b.ex = expander.New(nil, expander.DefaultDelay, expander.Delete, b.pasteSnippet)
 	b.showGestureHUD = b.showGestureCompass
 	b.hideGestureHUD = b.hideGestureCompass
 	b.status = folderItem("Loading snippets", b.snippetsDir)
@@ -1208,6 +1255,7 @@ func main() {
 	b.mouseStatus = folderItem("Loading mouse gestures", b.mouseDir)
 	b.timerStatus = fileItem("Loading timer settings", examples, dir, activity.FileName)
 	b.badgesStatus = fileItem("Loading badge apps", examples, dir, badge.FileName)
+	b.clipboardStatus = fileItem("Loading clipboard flash", examples, dir, copyflash.FileName)
 	leaderEval := b.newLeaderEvaluator(scriptsDir, loginPath)
 	b.leader = b.newLeader(leaderAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed))
 	b.runGesture = expandAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed)
@@ -1232,6 +1280,7 @@ func main() {
 			b.reloadQuitter()
 			b.reloadTimer()
 			b.reloadBadges()
+			b.reloadClipboard()
 		})
 		// A display that drops and returns moves every window twice;
 		// rounds hold meanwhile so the rules do not clamp the windows to
@@ -1251,6 +1300,7 @@ func main() {
 			b.ex.Stop()
 			b.rules.Stop()
 			b.quitter.Stop()
+			b.copyflash.Stop()
 			b.stopTap()
 			for _, w := range []*snippet.Watcher{snippetsWatcher, leadersWatcher, mouseWatcher, rulesWatcher} {
 				if w != nil {
@@ -1259,7 +1309,7 @@ func main() {
 			}
 		})
 
-		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.mouseStatus, b.rulesStatus, b.quitterStatus, b.timerStatus, b.badgesStatus}
+		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.mouseStatus, b.rulesStatus, b.quitterStatus, b.timerStatus, b.badgesStatus, b.clipboardStatus}
 		if !trusted {
 			items = append(items, &mygo.MenuItem{Label: grantAccessibility, Click: func(*mygo.MenuItem, *mygo.Window) {
 				// Granted meanwhile: the tap needs a fresh process to see it.
@@ -1301,6 +1351,7 @@ func main() {
 		}
 		b.hud.Store(hud.New(tray, b.leader.Snapshot))
 		b.compass.Store(hud.NewCompass(tray))
+		b.flash.Store(copyflash.NewFlash(tray))
 		b.startActivity()
 	})
 	// The flyouts are the only windows and are never closed, only hidden;

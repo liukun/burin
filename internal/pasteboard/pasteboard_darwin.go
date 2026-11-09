@@ -79,29 +79,34 @@ func goString(str objc.ID) string {
 }
 
 // WriteConcealed puts text on the pasteboard marked concealed and transient,
-// so clipboard history managers skip it.
-func WriteConcealed(text string) bool { return write(text, true) }
+// so clipboard history managers skip it. It returns the change count the
+// write made, the one clearContents gave it.
+func WriteConcealed(text string) (count int, ok bool) { return write(text, true) }
 
 // WriteText puts text on the pasteboard as an ordinary copy, which
 // clipboard history managers record.
-func WriteText(text string) bool { return write(text, false) }
+func WriteText(text string) bool {
+	_, ok := write(text, false)
+	return ok
+}
 
-func write(text string, concealed bool) bool {
-	ok := false
+// write puts text on the pasteboard and returns the change count that
+// clearContents returned: the generation this write owns, unlike a
+// changeCount read afterwards, which another app's write could have raised.
+func write(text string, concealed bool) (count int, ok bool) {
 	withPool(func() {
 		pb := general()
-		pb.Send(sel("clearContents"))
+		count = objc.Send[int](pb, sel("clearContents"))
 		if !objc.Send[bool](pb, sel("setString:forType:"), nsString(text), nsString(typeString)) {
 			return
 		}
 		ok = true
-		if !concealed {
-			return
+		if concealed {
+			pb.Send(sel("setString:forType:"), nsString(""), nsString(typeConcealed))
+			pb.Send(sel("setString:forType:"), nsString(""), nsString(typeTransient))
 		}
-		pb.Send(sel("setString:forType:"), nsString(""), nsString(typeConcealed))
-		pb.Send(sel("setString:forType:"), nsString(""), nsString(typeTransient))
 	})
-	return ok
+	return count, ok
 }
 
 // ReadText returns the pasteboard's plain text, empty when it has none.
@@ -111,4 +116,14 @@ func ReadText() string {
 		text = goString(general().Send(sel("stringForType:"), nsString(typeString)))
 	})
 	return text
+}
+
+// ChangeCount returns the general pasteboard's change count, which goes up
+// each time its contents change: a copy in any app, or a write here.
+func ChangeCount() int {
+	var count int
+	withPool(func() {
+		count = objc.Send[int](general(), sel("changeCount"))
+	})
+	return count
 }

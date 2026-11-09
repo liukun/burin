@@ -7,6 +7,7 @@ import (
 
 	"burin/internal/activity"
 	"burin/internal/badge"
+	"burin/internal/copyflash"
 	"burin/internal/gesture"
 	"burin/internal/leader"
 	"burin/internal/quitter"
@@ -82,6 +83,11 @@ func TestExamplesLoad(t *testing.T) {
 	badges := badge.Load(filepath.Join(dir, badge.FileName))
 	if len(badges.Errors) != 0 || badges.Defaulted || len(badges.Apps) != len(badge.DefaultApps) || !badges.Enabled {
 		t.Errorf("badges: %+v", badges)
+	}
+
+	clipboard := copyflash.Load(filepath.Join(dir, copyflash.FileName))
+	if len(clipboard.Errors) != 0 || clipboard.Defaulted || !clipboard.Enabled {
+		t.Errorf("clipboard: %+v", clipboard)
 	}
 }
 

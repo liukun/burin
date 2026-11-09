@@ -79,6 +79,11 @@ A small bar at the top of every display shows how long you have been working wit
 break, reminds you to rest, and shows the Dock badges of the chat apps you choose. See
 [docs/timer.md](docs/timer.md) and [docs/badges.md](docs/badges.md).
 
+### Clipboard flash
+
+A 📑 grows and fades in the middle of the display under the pointer each time something
+is copied, so you see the copy landed. See [docs/clipboard.md](docs/clipboard.md).
+
 ### Window rules
 
 Pin an app's windows to a corner of a display, and keep other windows clear of a left

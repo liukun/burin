@@ -9,6 +9,7 @@ import (
 	"burin/internal/badge"
 	"burin/internal/copyflash"
 	"burin/internal/gesture"
+	"burin/internal/inputmark"
 	"burin/internal/leader"
 	"burin/internal/quitter"
 	"burin/internal/seed"
@@ -88,6 +89,11 @@ func TestExamplesLoad(t *testing.T) {
 	clipboard := copyflash.Load(filepath.Join(dir, copyflash.FileName))
 	if len(clipboard.Errors) != 0 || clipboard.Defaulted || !clipboard.Enabled {
 		t.Errorf("clipboard: %+v", clipboard)
+	}
+
+	inputSources := inputmark.Load(filepath.Join(dir, inputmark.FileName))
+	if len(inputSources.Errors) != 0 || inputSources.Defaulted || !inputSources.Enabled || len(inputSources.Styles) != 2 {
+		t.Errorf("input sources: %+v", inputSources)
 	}
 }
 

@@ -144,6 +144,25 @@ func TestHoldShowsAndReleaseHides(t *testing.T) {
 	}
 }
 
+// TestLeftButtonPassesHold feeds the left button's press and release,
+// which reach the tap for the input source mark: neither is consumed,
+// and while the trigger's modifier is held the hold goes on.
+func TestLeftButtonPassesHold(t *testing.T) {
+	l, rec := newLeader(t, map[string]string{"cmd_r": cmdR})
+	l.Handle(EventFlagsChanged, keyRCmd, rCmdDown, false)
+	for _, et := range []uint32{1, 2} {
+		if l.Handle(et, 0, rCmdDown, false) {
+			t.Errorf("left button event %d consumed", et)
+		}
+	}
+	if !l.Snapshot().Active {
+		t.Fatal("left click ended the hold")
+	}
+	if _, h := rec.counts(); h != 0 {
+		t.Fatalf("hidden %d times", h)
+	}
+}
+
 func TestLeftCmdDoesNotTrigger(t *testing.T) {
 	l, rec := newLeader(t, map[string]string{"cmd_r": cmdR})
 	l.Handle(EventFlagsChanged, 55, cmdFlag|deviceLCmd, false)

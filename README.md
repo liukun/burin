@@ -84,6 +84,14 @@ break, reminds you to rest, and shows the Dock badges of the chat apps you choos
 A 📑 grows and fades in the middle of the display under the pointer each time something
 is copied, so you see the copy landed. See [docs/clipboard.md](docs/clipboard.md).
 
+### Input source mark
+
+The current input source shows as a large, faint character in the middle of the current
+window's display when you switch apps or input sources, and as a small one that follows
+the pointer when you click (a click that switches apps shows only this small one), so you
+know which language you are about to type in. See
+[docs/input_sources.md](docs/input_sources.md).
+
 ### Window rules
 
 Pin an app's windows to a corner of a display, and keep other windows clear of a left

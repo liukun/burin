@@ -25,6 +25,7 @@ import (
 	"burin/internal/expander"
 	"burin/internal/gesture"
 	"burin/internal/hud"
+	"burin/internal/inputmark"
 	"burin/internal/keys"
 	"burin/internal/leader"
 	"burin/internal/pasteboard"
@@ -48,22 +49,24 @@ const (
 )
 
 // burin holds the running app's snippet, leader, mouse gesture, window
-// rule, quitter, timer, badge and clipboard flash state.
+// rule, quitter, timer, badge, clipboard flash and input source mark
+// state.
 type burin struct {
 	snippetsDir string
 	leadersDir  string
 	mouseDir    string
-	// windowRulesFile, quitterFile, timerFile, badgesFile and
-	// clipboardFile sit directly in the config dir, outside snippets/ and
-	// leaders/, so neither of their loaders reads them.
-	windowRulesFile string
-	quitterFile     string
-	timerFile       string
-	badgesFile      string
-	clipboardFile   string
-	eval            *placeholder.Evaluator
-	ex              *expander.Expander
-	leader          *leader.Leader
+	// windowRulesFile, quitterFile, timerFile, badgesFile, clipboardFile
+	// and inputSourcesFile sit directly in the config dir, outside
+	// snippets/ and leaders/, so neither of their loaders reads them.
+	windowRulesFile  string
+	quitterFile      string
+	timerFile        string
+	badgesFile       string
+	clipboardFile    string
+	inputSourcesFile string
+	eval             *placeholder.Evaluator
+	ex               *expander.Expander
+	leader           *leader.Leader
 	// hud is set once the tray exists; the tap may fire before.
 	hud           atomic.Pointer[hud.HUD]
 	compass       atomic.Pointer[hud.Compass]
@@ -144,6 +147,33 @@ type burin struct {
 	copyflash       *copyflash.Watcher
 	flash           atomic.Pointer[copyflash.Flash]
 	clipboardStatus *mygo.MenuItem
+	// inputWatch watches the frontmost app and the input source and
+	// shows the mark on each change and click; inputMark is set once the
+	// tray exists, and the watcher may fire before. inputSources are the
+	// styles of input_sources.md, swapped on reload, and inputReported
+	// the input sources without a section already logged.
+	inputWatch    *inputmark.Watcher
+	inputMark     atomic.Pointer[inputmark.Mark]
+	inputSources  atomic.Pointer[inputmark.Settings]
+	inputReported inputmark.Reported
+	inputClicks   inputmark.Clicks
+	inputStatus   *mygo.MenuItem
+	// inputPress tells the watcher of a left press, and inputClick of a
+	// left click; showSmallMark shows a style in the small mark beside a
+	// click, and showBigMark, for big mark gen, in the big mark on the
+	// display nearest center, or under the pointer without found;
+	// focusedCenter reads the center of an app's focused window. Tests
+	// stand in for them.
+	inputPress    func()
+	inputClick    func(inputmark.Point)
+	showSmallMark func(style inputmark.Style, at inputmark.Point)
+	showBigMark   func(style inputmark.Style, center mygo.Point, found bool, gen uint64)
+	focusedCenter func(pid int32) (center mygo.Point, found bool)
+	// bigMarkGen counts the big marks asked for. Their focused windows
+	// are read on goroutines of their own, which may finish in any
+	// order: one no longer the latest is dropped, lest an earlier app's
+	// display or input source show last.
+	bigMarkGen atomic.Uint64
 	// workNotice is the last rest reminder, closed as the next one shows;
 	// workNoticeMu guards it.
 	workNoticeMu sync.Mutex
@@ -624,8 +654,29 @@ func (b *burin) handleExpander(eventType uint32, event uintptr) bool {
 	})
 }
 
-// keyMask is the part of the tap's mask that is always on.
-const keyMask = 1<<eventtap.EventKeyDown | 1<<eventtap.EventKeyUp | 1<<eventtap.EventFlagsChanged
+// handleInputClick shows the input source mark after a left click, where
+// it was released: a press and release no more than inputmark.ClickSlop
+// apart. It never consumes the event.
+func (b *burin) handleInputClick(eventType uint32, event uintptr) bool {
+	switch eventType {
+	case eventtap.EventLeftMouseDown:
+		x, y := b.io.location(event)
+		b.inputClicks.Press(inputmark.Point{X: x, Y: y})
+		b.inputPress()
+	case eventtap.EventLeftMouseUp:
+		x, y := b.io.location(event)
+		up := inputmark.Point{X: x, Y: y}
+		if b.inputClicks.Release(up) {
+			b.inputClick(up)
+		}
+	}
+	return false
+}
+
+// keyMask is the part of the tap's mask that is always on: the keys, and
+// the left button's press and release for the input source mark.
+const keyMask = 1<<eventtap.EventKeyDown | 1<<eventtap.EventKeyUp | 1<<eventtap.EventFlagsChanged |
+	1<<eventtap.EventLeftMouseDown | 1<<eventtap.EventLeftMouseUp
 
 // stopper is a running event tap; Stop reports whether it stopped.
 type stopper interface {
@@ -634,10 +685,11 @@ type stopper interface {
 
 // startEventTap starts an event tap for the key events and the mouse
 // events of mouseMask, which offers every event to the gestures first,
-// then to the leader and then to the expander.
+// then to the leader, then to the expander and last to the input source
+// mark.
 func (b *burin) startEventTap(mouseMask uint64) (stopper, error) {
 	tap := &eventtap.Tap{}
-	if err := tap.Start(keyMask|mouseMask, chain(b.handleGesture, b.handleLeader, b.handleExpander)); err != nil {
+	if err := tap.Start(keyMask|mouseMask, chain(b.handleGesture, b.handleLeader, b.handleExpander, b.handleInputClick)); err != nil {
 		return nil, err
 	}
 	return tap, nil
@@ -973,8 +1025,8 @@ func (b *burin) remindRest(elapsed time.Duration) {
 }
 
 // reload rescans the snippets, leaders and mouse directories and rereads
-// the window rules, quitter rules, timer settings, badge apps and
-// clipboard flash settings.
+// the window rules, quitter rules, timer settings, badge apps, clipboard
+// flash settings and input source mark settings.
 func (b *burin) reload() {
 	b.reloadSnippets()
 	b.reloadLeaders()
@@ -984,6 +1036,7 @@ func (b *burin) reload() {
 	b.reloadTimer()
 	b.reloadBadges()
 	b.reloadClipboard()
+	b.reloadInputSources()
 }
 
 // reloadSnippets rescans the snippets directory and swaps the keyword
@@ -1149,6 +1202,97 @@ func (b *burin) reloadClipboard() {
 	b.clipboardStatus.SetLabel("Clipboard flash: " + state)
 }
 
+// reloadInputSources rereads the input source mark settings and turns
+// the watcher on or off. A missing or unreadable file leaves it on.
+func (b *burin) reloadInputSources() {
+	b.reloadMu.Lock()
+	defer b.reloadMu.Unlock()
+	s := inputmark.Load(b.inputSourcesFile)
+	b.inputSources.Store(&s)
+	b.inputWatch.SetEnabled(s.Enabled)
+	for _, err := range s.Errors {
+		log.Printf("input sources: %v", err)
+	}
+	if s.Defaulted {
+		log.Printf("input sources: %s missing or unusable, using the defaults", b.inputSourcesFile)
+	}
+	state := "off"
+	if s.Enabled {
+		state = "on"
+	}
+	log.Printf("loaded input source mark %s with %d input sources from %s", state, len(s.Styles), b.inputSourcesFile)
+	b.inputStatus.SetLabel("Input source mark: " + state)
+}
+
+// showInputMark shows the mark of src for t, once the tray exists and
+// the settings are loaded, unless its style hides it: small beside a
+// click, or else large in the middle of the display of the focused window
+// of t's app. An input source without a section is logged once, with the
+// name its fallback comes from, so a section can be added for it.
+func (b *burin) showInputMark(src inputmark.Source, t inputmark.Trigger) {
+	s := b.inputSources.Load()
+	if s == nil {
+		return
+	}
+	style, configured := s.StyleFor(src)
+	if !configured && b.inputReported.First(src.ID) {
+		log.Printf("input sources: no section for %s (%s), showing %q", src.ID, src.Name, style.Text)
+	}
+	if !style.Show {
+		return
+	}
+	if t.Kind == inputmark.Click {
+		b.showSmallMark(style, t.Click)
+		return
+	}
+	// Accessibility may wait on the app for a while, and this runs on the
+	// main thread.
+	gen := b.bigMarkGen.Add(1)
+	b.spawn(func() {
+		// A later mark asked for meanwhile spares the read.
+		if !b.latestBigMark(gen) {
+			return
+		}
+		center, found := b.focusedCenter(t.PID)
+		if !b.latestBigMark(gen) {
+			return
+		}
+		b.showBigMark(style, center, found, gen)
+	})
+}
+
+// latestBigMark reports whether gen is the latest big mark asked for.
+func (b *burin) latestBigMark(gen uint64) bool { return b.bigMarkGen.Load() == gen }
+
+// showSmallMarkWindow is showSmallMark of the running app: the small
+// mark, once the tray exists.
+func (b *burin) showSmallMarkWindow(style inputmark.Style, at inputmark.Point) {
+	if m := b.inputMark.Load(); m != nil {
+		m.ShowSmall(style, at)
+	}
+}
+
+// showBigMarkWindow is showBigMark of the running app: the big mark, once
+// the tray exists, on the display under the pointer when the focused
+// window was not found, unless a later one was asked for meanwhile.
+func (b *burin) showBigMarkWindow(style inputmark.Style, center mygo.Point, found bool, gen uint64) {
+	m := b.inputMark.Load()
+	if m == nil {
+		return
+	}
+	mygo.RunOnMain(func() {
+		// Checked again here: the RunOnMain of two marks may run in
+		// either order too.
+		if !b.latestBigMark(gen) {
+			return
+		}
+		if !found {
+			center = mygo.Screen.CursorScreenPoint()
+		}
+		m.ShowBig(style, center)
+	})
+}
+
 // pasteSnippet is expander.Paste, which writes the pasteboard once: that
 // write is not a copy of the user's, so the change it made must not
 // flash. Paste's sleeps and Cmd+V run under the watcher's lock too, about
@@ -1228,23 +1372,30 @@ func main() {
 	scriptsDir := filepath.Join(dir, "scripts")
 	loginPath := placeholder.StartLoginPath()
 	b := &burin{
-		snippetsDir:     filepath.Join(dir, "snippets"),
-		leadersDir:      filepath.Join(dir, "leaders"),
-		mouseDir:        filepath.Join(dir, "mouse"),
-		windowRulesFile: filepath.Join(dir, windowrules.FileName),
-		quitterFile:     filepath.Join(dir, quitter.FileName),
-		timerFile:       filepath.Join(dir, activity.FileName),
-		badgesFile:      filepath.Join(dir, badge.FileName),
-		clipboardFile:   filepath.Join(dir, copyflash.FileName),
-		badges:          badge.NewWatcher(),
-		speaker:         badge.NewSpeaker(),
-		eval:            newEvaluator(scriptsDir, loginPath),
-		io:              systemEventIO(),
-		spawn:           goSpawn,
-		after:           time.AfterFunc,
+		snippetsDir:      filepath.Join(dir, "snippets"),
+		leadersDir:       filepath.Join(dir, "leaders"),
+		mouseDir:         filepath.Join(dir, "mouse"),
+		windowRulesFile:  filepath.Join(dir, windowrules.FileName),
+		quitterFile:      filepath.Join(dir, quitter.FileName),
+		timerFile:        filepath.Join(dir, activity.FileName),
+		badgesFile:       filepath.Join(dir, badge.FileName),
+		clipboardFile:    filepath.Join(dir, copyflash.FileName),
+		inputSourcesFile: filepath.Join(dir, inputmark.FileName),
+		badges:           badge.NewWatcher(),
+		speaker:          badge.NewSpeaker(),
+		eval:             newEvaluator(scriptsDir, loginPath),
+		io:               systemEventIO(),
+		spawn:            goSpawn,
+		after:            time.AfterFunc,
 	}
 	b.startTap = b.startEventTap
 	b.copyflash = copyflash.NewWatcher(b.showFlash)
+	b.inputWatch = inputmark.NewWatcher(b.showInputMark)
+	b.inputPress = b.inputWatch.Press
+	b.inputClick = b.inputWatch.Click
+	b.showSmallMark = b.showSmallMarkWindow
+	b.showBigMark = b.showBigMarkWindow
+	b.focusedCenter = inputmark.FocusedWindowCenter
 	b.ex = expander.New(nil, expander.DefaultDelay, expander.Delete, b.pasteSnippet)
 	b.showGestureHUD = b.showGestureCompass
 	b.hideGestureHUD = b.hideGestureCompass
@@ -1256,6 +1407,7 @@ func main() {
 	b.timerStatus = fileItem("Loading timer settings", examples, dir, activity.FileName)
 	b.badgesStatus = fileItem("Loading badge apps", examples, dir, badge.FileName)
 	b.clipboardStatus = fileItem("Loading clipboard flash", examples, dir, copyflash.FileName)
+	b.inputStatus = fileItem("Loading input source mark", examples, dir, inputmark.FileName)
 	leaderEval := b.newLeaderEvaluator(scriptsDir, loginPath)
 	b.leader = b.newLeader(leaderAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed))
 	b.runGesture = expandAction(leaderEval, pasteboard.WriteText, notify, placeholderFailed)
@@ -1281,6 +1433,7 @@ func main() {
 			b.reloadTimer()
 			b.reloadBadges()
 			b.reloadClipboard()
+			b.reloadInputSources()
 		})
 		// A display that drops and returns moves every window twice;
 		// rounds hold meanwhile so the rules do not clamp the windows to
@@ -1301,6 +1454,7 @@ func main() {
 			b.rules.Stop()
 			b.quitter.Stop()
 			b.copyflash.Stop()
+			b.inputWatch.Stop()
 			b.stopTap()
 			for _, w := range []*snippet.Watcher{snippetsWatcher, leadersWatcher, mouseWatcher, rulesWatcher} {
 				if w != nil {
@@ -1309,7 +1463,7 @@ func main() {
 			}
 		})
 
-		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.mouseStatus, b.rulesStatus, b.quitterStatus, b.timerStatus, b.badgesStatus, b.clipboardStatus}
+		items := []*mygo.MenuItem{b.status, b.leaderStatus, b.mouseStatus, b.rulesStatus, b.quitterStatus, b.timerStatus, b.badgesStatus, b.clipboardStatus, b.inputStatus}
 		if !trusted {
 			items = append(items, &mygo.MenuItem{Label: grantAccessibility, Click: func(*mygo.MenuItem, *mygo.Window) {
 				// Granted meanwhile: the tap needs a fresh process to see it.
@@ -1352,6 +1506,7 @@ func main() {
 		b.hud.Store(hud.New(tray, b.leader.Snapshot))
 		b.compass.Store(hud.NewCompass(tray))
 		b.flash.Store(copyflash.NewFlash(tray))
+		b.inputMark.Store(inputmark.NewMark(tray))
 		b.startActivity()
 	})
 	// The flyouts are the only windows and are never closed, only hidden;

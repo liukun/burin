@@ -82,6 +82,13 @@ func TestKindOf(t *testing.T) {
 	if _, ok := KindOf(10); ok {
 		t.Error("keyDown has a kind")
 	}
+	// The left button's press and release reach the tap for the input
+	// source mark, and must pass the gestures untouched.
+	for _, et := range []uint32{1, 2} {
+		if _, ok := KindOf(et); ok {
+			t.Errorf("left button event %d has a kind", et)
+		}
+	}
 }
 
 func TestRecognizerClick(t *testing.T) {

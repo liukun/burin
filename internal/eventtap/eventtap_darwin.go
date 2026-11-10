@@ -19,9 +19,11 @@ import (
 )
 
 const (
-	EventKeyDown      = 10
-	EventKeyUp        = 11
-	EventFlagsChanged = 12
+	EventLeftMouseDown = 1
+	EventLeftMouseUp   = 2
+	EventKeyDown       = 10
+	EventKeyUp         = 11
+	EventFlagsChanged  = 12
 
 	eventTapDisabledByTimeout   = 0xFFFFFFFE
 	eventTapDisabledByUserInput = 0xFFFFFFFF

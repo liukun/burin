@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"burin/internal/expander"
 	"burin/internal/gesture"
 	"burin/internal/hud"
 	"burin/internal/keys"
@@ -21,6 +22,7 @@ type fakeIO struct {
 	t        *testing.T
 	button   map[uintptr]int64
 	user     map[uintptr]int64
+	key      map[uintptr]expander.Key
 	loc      map[uintptr][2]float64
 	failCopy map[uintptr]bool
 	front    workspace.App
@@ -36,6 +38,7 @@ func newFakeIO(t *testing.T) *fakeIO {
 		t:        t,
 		button:   map[uintptr]int64{},
 		user:     map[uintptr]int64{},
+		key:      map[uintptr]expander.Key{},
 		loc:      map[uintptr][2]float64{},
 		failCopy: map[uintptr]bool{},
 		next:     1000,
@@ -46,6 +49,7 @@ func newFakeIO(t *testing.T) *fakeIO {
 func (f *fakeIO) eventIO() eventIO {
 	return eventIO{
 		userData:    func(ev uintptr) int64 { return f.user[ev] },
+		key:         func(ev uintptr) expander.Key { return f.key[ev] },
 		mouseButton: func(ev uintptr) int64 { return f.button[ev] },
 		location: func(ev uintptr) (float64, float64) {
 			l := f.loc[ev]

@@ -415,11 +415,20 @@ func chain(handlers ...eventtap.Handler) eventtap.Handler {
 	}
 }
 
+// isBurinEvent reports whether event was posted by burin itself: by the
+// leader or a gesture replay (keys.SyntheticMark), or by a snippet
+// expansion (keys.ExpansionMark).
+func (b *burin) isBurinEvent(event uintptr) bool {
+	mark := b.io.userData(event)
+	return mark == keys.SyntheticMark || mark == keys.ExpansionMark
+}
+
 // handleLeader offers key events to the leader. The keys the leader types
 // itself (keys.Stroke) come back through the tap and skip it, so a typed
 // trigger cannot hold it again; they go on to the expander like typed ones.
+// The keys of an expansion skip it too.
 func (b *burin) handleLeader(eventType uint32, event uintptr) bool {
-	if eventtap.UserData(event) == keys.SyntheticMark {
+	if b.isBurinEvent(event) {
 		return false
 	}
 	repeat := eventType == eventtap.EventKeyDown && eventtap.Autorepeat(event)
@@ -432,13 +441,13 @@ func (b *burin) handleLeader(eventType uint32, event uintptr) bool {
 // too. On release, its location against the press's tells the gesture,
 // and the rest is left to finishGesture on a goroutine, as the tap must
 // return quickly. The mouse events that a replay posts come back marked
-// and pass.
+// and pass, as do the events of an expansion.
 func (b *burin) handleGesture(eventType uint32, event uintptr) bool {
 	kind, isMouse := gesture.KindOf(eventType)
 	if !isMouse {
 		return false
 	}
-	if b.io.userData(event) == keys.SyntheticMark {
+	if b.isBurinEvent(event) {
 		return false
 	}
 	button := gesture.Button(b.io.mouseButton(event))
@@ -618,6 +627,7 @@ func (b *burin) runGestureRule(button gesture.Button, dir gesture.Direction) boo
 // workspace, so that tests can stand in for them.
 type eventIO struct {
 	userData     func(event uintptr) int64
+	key          func(event uintptr) expander.Key
 	mouseButton  func(event uintptr) int64
 	location     func(event uintptr) (x, y float64)
 	copyEvent    func(event uintptr) uintptr
@@ -630,6 +640,7 @@ type eventIO struct {
 func systemEventIO() eventIO {
 	return eventIO{
 		userData:     eventtap.UserData,
+		key:          eventKey,
 		mouseButton:  eventtap.MouseButton,
 		location:     eventtap.Location,
 		copyEvent:    eventtap.CopyEvent,
@@ -642,16 +653,26 @@ func systemEventIO() eventIO {
 // goSpawn runs fn on a goroutine of its own.
 func goSpawn(fn func()) { go fn() }
 
-// handleExpander feeds keyDown events to the expander.
+// eventKey reads the key of a keyDown event.
+func eventKey(event uintptr) expander.Key {
+	return expander.Key{
+		Keycode: eventtap.Keycode(event),
+		Flags:   eventtap.Flags(event),
+		Chars:   eventtap.UnicodeString(event),
+	}
+}
+
+// handleExpander feeds keyDown events to the expander. The keys of an
+// expansion (keys.ExpansionMark) are not fed, but the keys the leader
+// types (keys.SyntheticMark) are, as typed text.
 func (b *burin) handleExpander(eventType uint32, event uintptr) bool {
 	if eventType != eventtap.EventKeyDown {
 		return false
 	}
-	return b.ex.HandleKey(expander.Key{
-		Keycode: eventtap.Keycode(event),
-		Flags:   eventtap.Flags(event),
-		Chars:   eventtap.UnicodeString(event),
-	})
+	if b.io.userData(event) == keys.ExpansionMark {
+		return false
+	}
+	return b.ex.HandleKey(b.io.key(event))
 }
 
 // handleInputClick shows the input source mark after a left click, where
